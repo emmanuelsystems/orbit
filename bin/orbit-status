@@ -5,6 +5,17 @@ slug="${1:-}"
 [ -n "$slug" ] || { echo "usage: orbit status <mission-slug>" >&2; exit 2; }
 mission="$ORBIT_HOME/missions/$slug"
 [ -d "$mission" ] || { echo "error: unknown Mission: $slug" >&2; exit 1; }
-printf 'ORBIT // MISSION CONTROL\nMission: %s\nHome: %s\nAccepted Mission State: %s\n' "$slug" "$mission" "$mission/state/current.md"
+printf 'ORBIT // MISSION CONTROL\nMission: %s\nHome: %s\nAccepted Mission State: %s\nCrew Manifest: %s\n' "$slug" "$mission" "$mission/state/current.md" "$mission/crew.yaml"
 latest="$(find "$mission/orbits" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null | sort | tail -1 || true)"
-if [ -n "$latest" ]; then printf 'Latest Orbit: %s\nArtifacts:\n' "$latest"; find "$mission/orbits/$latest" -maxdepth 1 -type f -printf '  - %f\n' | sort; if [ -f "$mission/orbits/$latest/decision-action-register.md" ]; then printf 'Decision gate artifact: READY FOR REVIEW\n'; fi; else echo 'Latest Orbit: none'; fi
+if [ -n "$latest" ]; then
+  orbit="$mission/orbits/$latest"
+  printf 'Latest Orbit: %s\nMission Packet artifacts:\n' "$latest"
+  find "$orbit" -maxdepth 1 -type f -printf '  - %f\n' | sort
+  if grep -q 'PINNED_' "$orbit/source-index.md" 2>/dev/null; then echo 'Flight Recorder: PINNED'; else echo 'Flight Recorder: WAITING'; fi
+  if [ -f "$orbit/mission-control-plan.md" ]; then echo 'Mission Control plan: AVAILABLE'; fi
+  if [ -f "$orbit/crew-findings.md" ]; then echo 'Crew findings: AVAILABLE'; fi
+  if [ -f "$orbit/gate-log.md" ]; then echo 'Gate Control: AVAILABLE'; fi
+  if [ -f "$orbit/decision-action-register.md" ]; then echo 'Decision register: READY FOR REVIEW'; fi
+else
+  echo 'Latest Orbit: none'
+fi
