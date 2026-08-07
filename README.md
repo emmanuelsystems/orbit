@@ -29,6 +29,7 @@ Current scope:
 - local Markdown state
 - local `.txt` or `.md` transcripts
 - single-agent two-pass analysis
+- multi-agent crew model planned and supported by the ORBIT architecture
 - optional Firstmate orchestration later
 - no external writes by default
 - no autonomous decision authority
@@ -66,12 +67,38 @@ Requirements:
 - Git
 - a capable agent harness such as Codex
 
-Clone ORBIT and initialize a Mission:
+### New installation
+
+Clone the live ORBIT repository:
 
 ```sh
-git clone https://github.com/YOUR-ORG/orbit.git
+cd ~/code
+git clone https://github.com/emmanuelsystems/orbit.git
 cd orbit
+```
+
+Verify the install:
+
+```sh
+./tests/smoke.sh
+./bin/orbit check
+```
+
+Initialize your first Mission:
+
+```sh
 ./bin/orbit init weekly-leadership "Weekly Leadership Huddle"
+```
+
+### Already cloned ORBIT?
+
+If ORBIT is already on your machine, update it and verify the current version:
+
+```sh
+cd ~/code/orbit
+git pull --ff-only
+./tests/smoke.sh
+./bin/orbit check
 ```
 
 Private Mission data lives outside the distro repo by default:
@@ -80,10 +107,11 @@ Private Mission data lives outside the distro repo by default:
 ~/.orbit/
 ```
 
-Override it with:
+You normally do not need to configure this. For an intentionally separate private home, set `ORBIT_HOME` to a real directory on your machine, for example:
 
 ```sh
-export ORBIT_HOME=/path/to/private/orbit-home
+mkdir -p "$HOME/orbit-private"
+export ORBIT_HOME="$HOME/orbit-private"
 ```
 
 Launch the next Orbit:
@@ -92,13 +120,20 @@ Launch the next Orbit:
 ./bin/orbit launch weekly-leadership
 ```
 
-After the meeting, register its Flight Recorder:
+After the meeting, register its Flight Recorder using the actual path to your transcript. Example:
 
 ```sh
-./bin/orbit ingest weekly-leadership /path/to/transcript.txt
+./bin/orbit ingest weekly-leadership "$HOME/Downloads/weekly-huddle-transcript.txt"
 ```
 
-Then launch Codex from the ORBIT repo and invoke:
+Then launch Codex from the ORBIT repo:
+
+```sh
+cd ~/code/orbit
+codex
+```
+
+Inside Codex, invoke:
 
 ```text
 $orbit-analyze
@@ -203,12 +238,15 @@ Flight Recorder
   -> GO / NO-GO register
 ```
 
+ORBIT's architecture also supports multiple specialized sub-agents. A multi-agent runtime can execute independent roles such as Recorder Analyst, Systems Analyst, Decision Verifier, State Analyst, and Context Scout, then return their findings to Mission Control for reconciliation.
+
 A future Firstmate adapter can execute the same contract with separate workers:
 
 ```text
 Firstmate
   -> Recorder Analyst worker
   -> Systems Analyst worker
+  -> Decision Verifier worker
   -> reconciled ORBIT packet
 ```
 
