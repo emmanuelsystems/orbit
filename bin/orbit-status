@@ -9,13 +9,17 @@ printf 'ORBIT // MISSION CONTROL\nMission: %s\nHome: %s\nAccepted Mission State:
 latest="$(find "$mission/orbits" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null | sort | tail -1 || true)"
 if [ -n "$latest" ]; then
   orbit="$mission/orbits/$latest"
+  orders="$(find "$orbit/crew-orders" -maxdepth 1 -type f -name '*.md' 2>/dev/null | wc -l | tr -d ' ')"
+  returns="$(find "$orbit/crew-returns" -maxdepth 1 -type f -name '*.md' 2>/dev/null | wc -l | tr -d ' ')"
   printf 'Latest Orbit: %s\nMission Packet artifacts:\n' "$latest"
   find "$orbit" -maxdepth 1 -type f -printf '  - %f\n' | sort
   if grep -q 'PINNED_' "$orbit/source-index.md" 2>/dev/null; then echo 'Flight Recorder: PINNED'; else echo 'Flight Recorder: WAITING'; fi
-  if [ -f "$orbit/mission-control-plan.md" ]; then echo 'Mission Control plan: AVAILABLE'; fi
-  if [ -f "$orbit/crew-findings.md" ]; then echo 'Crew findings: AVAILABLE'; fi
-  if [ -f "$orbit/gate-log.md" ]; then echo 'Gate Control: AVAILABLE'; fi
-  if [ -f "$orbit/decision-action-register.md" ]; then echo 'Decision register: READY FOR REVIEW'; fi
+  [ -f "$orbit/mission-control-plan.md" ] && echo 'Mission Control plan: AVAILABLE'
+  printf 'Crew Orders: %s\n' "$orders"
+  printf 'Crew Returns: %s\n' "$returns"
+  [ -f "$orbit/reconciliation.md" ] && echo 'Reconciliation: AVAILABLE'
+  [ -f "$orbit/gate-log.md" ] && echo 'Gate Control: AVAILABLE'
+  [ -f "$orbit/decision-action-register.md" ] && echo 'Decision register: READY FOR REVIEW'
 else
   echo 'Latest Orbit: none'
 fi
