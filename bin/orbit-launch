@@ -11,11 +11,11 @@ mission="$ORBIT_HOME/missions/$slug"
 [ -f "$mission/crew.yaml" ] || cp "$ROOT/templates/crew-manifest.yaml" "$mission/crew.yaml"
 orbit="$mission/orbits/$date"
 umask 077
-mkdir -p "$orbit"
-for f in source-index.md briefing.md mission-control-plan.md crew-findings.md gate-log.md; do [ -e "$orbit/$f" ] || cp "$ROOT/templates/$f" "$orbit/$f"; done
+mkdir -p "$orbit/crew-orders" "$orbit/crew-returns"
+for f in source-index.md briefing.md mission-control-plan.md crew-findings.md gate-log.md reconciliation.md; do [ -e "$orbit/$f" ] || cp "$ROOT/templates/$f" "$orbit/$f"; done
 [ -e "$orbit/state-snapshot.md" ] || cp "$mission/state/current.md" "$orbit/state-snapshot.md"
-for f in source-index.md mission-control-plan.md crew-findings.md gate-log.md; do
+for f in source-index.md mission-control-plan.md crew-findings.md gate-log.md reconciliation.md; do
   sed -i "s/^- Mission:$/- Mission: $slug/" "$orbit/$f" 2>/dev/null || true
   sed -i "s/^- Orbit date:$/- Orbit date: $date/" "$orbit/$f" 2>/dev/null || true
 done
-printf 'ORBIT LAUNCHED\nMission: %s\nOrbit: %s\nOrbit folder: %s\nCrew Manifest: %s\nFLIGHT STATUS: PRE-BRIEF\nNext: invoke $orbit-launch in your agent to complete the Briefing and Mission Control triage.\n' "$slug" "$date" "$orbit" "$mission/crew.yaml"
+printf 'ORBIT LAUNCHED\nMission: %s\nOrbit: %s\nOrbit folder: %s\nCrew Manifest: %s\nCrew Registry: %s\nCrew Orders: %s\nCrew Returns: %s\nFLIGHT STATUS: PRE-BRIEF\nNext: invoke $orbit-launch in your agent to complete the Briefing, then run orbit plan after ingestion.\n' "$slug" "$date" "$orbit" "$mission/crew.yaml" "$ROOT/crews/registry.yaml" "$orbit/crew-orders" "$orbit/crew-returns"
