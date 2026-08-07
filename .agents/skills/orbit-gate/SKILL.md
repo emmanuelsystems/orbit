@@ -10,13 +10,27 @@ user-invocable: true
 
 Capture a live authority event without pretending it came from the Flight Recorder.
 
+## Resolve the active Mission and Orbit first
+
+Before inferring anything from the user's wording, read the private active Gate Control pointer:
+
+`$ORBIT_HOME/active-gate.md`, where `ORBIT_HOME` defaults to `$HOME/.orbit`.
+
+If that file exists, treat its Mission, Orbit date, Orbit path, and Gate Log as the authoritative current Gate Control context.
+
+Do not reinterpret phrases in the user's directive as a Mission name when an active Gate Control context is present.
+
+If `active-gate.md` is missing, then locate the intended Mission/Orbit from explicit user-provided context. If more than one valid target remains, ask only for the missing Mission or Orbit date rather than guessing.
+
 ## Required reads
 
 1. `AGENTS.md`
 2. `protocols/go-no-go.md`
 3. `protocols/gate-control.md`
-4. Mission-local `charter.md`
-5. current Orbit `gate-log.md`
+4. `$ORBIT_HOME/active-gate.md` when present
+5. active Mission `charter.md`
+6. active Orbit `gate-log.md`
+7. active Orbit `decision-action-register.md` when relevant
 
 ## Capture
 
@@ -35,7 +49,7 @@ If target, authority, or scope is materially ambiguous, ask only for the missing
 
 ## Write
 
-Append the authority event to the current Orbit `gate-log.md` and update its Active Gate State section.
+Append the authority event to the active Orbit `gate-log.md` and update its Active Gate State section.
 
 Do not delete superseded events.
 
