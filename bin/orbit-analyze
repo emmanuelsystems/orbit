@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ORBIT_HOME="${ORBIT_HOME:-$HOME/.orbit}"
 slug="${1:-}"
 date="${2:-}"
@@ -11,4 +12,14 @@ if [ -z "$date" ]; then date="$(find "$mission/orbits" -mindepth 1 -maxdepth 1 -
 orbit="$mission/orbits/$date"
 [ -f "$orbit/source-index.md" ] || { echo "error: missing source-index.md" >&2; exit 1; }
 if ! grep -q 'PINNED_' "$orbit/source-index.md"; then echo 'error: no pinned Flight Recorder; run orbit ingest first' >&2; exit 1; fi
-printf 'ORBIT // MISSION CONTROL\nMission: %s\nOrbit: %s\nIntake: READY\nTriage: REQUIRED\nCrew Manifest: %s\nRecorder Analyst: AVAILABLE\nSystems Analyst: AVAILABLE\nDecision Verifier: AVAILABLE\nGate Control: REQUIRED FOR CONSEQUENTIAL ITEMS\nMission Packet: %s\nInvoke $orbit-analyze in your agent to triage, plan, execute the required Crew roles, reconcile findings, and prepare the Mission Packet.\n' "$slug" "$date" "$mission/crew.yaml" "$orbit"
+bash "$ROOT/bin/orbit-plan" "$slug" "$date" >/dev/null
+orders="$(find "$orbit/crew-orders" -maxdepth 1 -type f -name '*.md' 2>/dev/null | wc -l | tr -d ' ')"
+returns="$(find "$orbit/crew-returns" -maxdepth 1 -type f -name '*.md' 2>/dev/null | wc -l | tr -d ' ')"
+printf 'ORBIT // CREW ORCHESTRATION\nMission: %s\nOrbit: %s\nCrew Manifest: %s\nCrew Registry: %s\nCrew Orders: %s (%s files)\nCrew Returns: %s (%s files)\nReconciliation: %s\nActive context: %s\n' "$slug" "$date" "$mission/crew.yaml" "$ROOT/crews/registry.yaml" "$orbit/crew-orders" "$orders" "$orbit/crew-returns" "$returns" "$orbit/reconciliation.md" "$ORBIT_HOME/active-orbit.md"
+if [ "$orders" -eq 0 ]; then
+  echo 'FLIGHT STATUS: WAITING FOR CREW PLAN'
+  echo 'Next: invoke $orbit-plan in your agent.'
+else
+  echo 'FLIGHT STATUS: CREW ORDERS READY'
+  echo 'Next: invoke $orbit-analyze in your agent to execute Crew Orders and reconcile returns.'
+fi
