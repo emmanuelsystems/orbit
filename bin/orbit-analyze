@@ -11,4 +11,4 @@ if [ -z "$date" ]; then date="$(find "$mission/orbits" -mindepth 1 -maxdepth 1 -
 orbit="$mission/orbits/$date"
 [ -f "$orbit/source-index.md" ] || { echo "error: missing source-index.md" >&2; exit 1; }
 if ! grep -q 'PINNED_' "$orbit/source-index.md"; then echo 'error: no pinned Flight Recorder; run orbit ingest first' >&2; exit 1; fi
-printf 'MISSION CONTROL\nMission: %s\nOrbit: %s\nRecorder Analyst: READY\nSystems Analyst: READY\nGO / NO-GO gate: REQUIRED\nInvoke $orbit-analyze in your agent to perform analysis.\n' "$slug" "$date"
+printf 'ORBIT // MISSION CONTROL\nMission: %s\nOrbit: %s\nIntake: READY\nTriage: REQUIRED\nCrew Manifest: %s\nRecorder Analyst: AVAILABLE\nSystems Analyst: AVAILABLE\nDecision Verifier: AVAILABLE\nGate Control: REQUIRED FOR CONSEQUENTIAL ITEMS\nMission Packet: %s\nInvoke $orbit-analyze in your agent to triage, plan, execute the required Crew roles, reconcile findings, and prepare the Mission Packet.\n' "$slug" "$date" "$mission/crew.yaml" "$orbit"
