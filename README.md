@@ -1,17 +1,24 @@
 # ORBIT
 
-**Every meeting closes the loop.**
+**Every conversation closes the loop.**
 
-ORBIT is a local-first operating system for recurring meetings. It turns a repeated meeting into a continuous operating cycle that recovers context, prepares the humans, captures the conversation, separates discussion from authorization, routes only approved work, and carries forward only the state needed for the next cycle.
+ORBIT is a local-first, human-governed orchestration system for recurring conversations and the work they produce.
 
-ORBIT is not a meeting recorder and not just a transcript summarizer. The product is the loop:
+Meetings are ORBIT's first Mission type, not its permanent boundary.
+
+ORBIT turns conversation into a controlled operating loop:
 
 ```text
 MISSION STATE
     -> BRIEFING
-    -> HUDDLE
-    -> FLIGHT RECORDER
-    -> ANALYSIS
+    -> CONVERSATION
+    -> FLIGHT RECORDER / TELEMETRY
+    -> MISSION CONTROL
+         INTAKE
+         TRIAGE
+         PLAN
+         ORCHESTRATE
+         RECONCILE
     -> GO / NO-GO
     -> FLIGHT PLAN
     -> DISPATCH
@@ -19,44 +26,175 @@ MISSION STATE
     -> NEXT ORBIT
 ```
 
+ORBIT is not just a transcript summarizer. Its job is to decide what work is required, coordinate the right specialist roles, preserve evidence and disagreement, enforce human authority, produce a reviewable Mission Packet, and carry forward only approved state.
+
 ## Status
 
-`v0.1-alpha`
+`v0.2-alpha` on the Mission Control development branch.
 
 Current scope:
 
 - Codex-first
 - local Markdown state
-- local `.txt` or `.md` transcripts
-- single-agent two-pass analysis
-- multi-agent crew model planned and supported by the ORBIT architecture
-- optional Firstmate orchestration later
+- local `.txt` or `.md` Flight Recorders
+- Mission Control triage and planning protocol
+- Crew Manifest and specialist role contracts
+- Recorder Analyst
+- Systems Analyst
+- Decision Verifier
+- live GO / NO-GO Gate Control
+- Mission Packet artifact model
+- sequential single-agent execution as the default runtime
+- multi-agent execution supported by contract, not yet automatically spawned by the CLI
+- optional Firstmate adapter planned
 - no external writes by default
 - no autonomous decision authority
-- explicit GO / NO-GO gates
 
-## Core concepts
+## Core principles
 
-- **Mission**: one recurring meeting series.
-- **Orbit**: one occurrence of that recurring meeting.
-- **Commander**: the human ultimately responsible for the Mission.
-- **Mission Control**: ORBIT's agent operating layer.
-- **Mission Charter**: purpose, cadence, participants, authority, and boundaries.
-- **Mission State**: reviewed durable context carried between Orbits.
-- **Telemetry**: bounded evidence and supporting sources.
-- **Briefing**: pre-meeting preparation.
-- **Flight Recorder**: the exact primary meeting transcript.
-- **Recorder Analyst**: extracts decisions, actions, owners, and evidence.
-- **Systems Analyst**: reviews workflow, friction, handoffs, and opportunities.
-- **Flight Plan**: authorized actions resulting from the meeting.
-- **Dispatch**: routing GO-authorized work to a destination.
-- **Debrief**: review of the completed Orbit.
+> **No useful independence, no extra agent.**
 
-The governing rule is simple:
+Mission Control activates another Crew role only when separate work materially improves evidence quality, specialization, speed, or verification.
 
 > **No GO, no dispatch.**
 
-See `protocols/go-no-go.md`.
+Analysis, recommendations, and Crew findings do not authorize external action.
+
+## Core concepts
+
+- **Mission**: a recurring conversation or operating series.
+- **Orbit**: one cycle of that Mission.
+- **Commander**: the accountable human authority.
+- **Mission Control**: ORBIT's router and orchestrator.
+- **Mission Charter**: purpose, participants, authority, cadence, and boundaries.
+- **Mission State**: reviewed context carried between Orbits.
+- **Telemetry**: bounded supporting evidence.
+- **Briefing**: pre-conversation preparation.
+- **Flight Recorder**: the exact primary conversation record.
+- **Crew**: specialist roles available to Mission Control.
+- **Gate Control**: human GO / NO-GO authority layer.
+- **Flight Plan**: authorized work resulting from an Orbit.
+- **Dispatch**: routing approved work to an external destination.
+- **Mission Packet**: the reviewable operating artifact produced by the Orbit.
+
+## Mission Control
+
+Mission Control is the central v0.2 change.
+
+```text
+INTAKE
+  -> TRIAGE
+  -> PLAN
+  -> ORCHESTRATE
+  -> RECONCILE
+  -> GATE
+  -> DISPATCH
+  -> REMEMBER
+```
+
+Mission Control answers:
+
+- What just came in?
+- What evidence is available?
+- What work actually needs to happen?
+- Which Crew roles are useful?
+- Which tasks can be independent or parallel?
+- Where is evidence missing or conflicting?
+- Which decisions require human authority?
+- What may proceed?
+- What should become durable Mission State?
+
+See `protocols/mission-control.md`.
+
+## Crews
+
+A Crew defines specialist roles available to Mission Control.
+
+The standard huddle Crew includes:
+
+```text
+Mission Control
+    |
+    +-- Recorder Analyst
+    +-- Systems Analyst
+    +-- Decision Verifier
+```
+
+The Mission-local `crew.yaml` also provides contracts for future State Analyst, Context Scout, Flight Planner, and Dispatch Agent roles.
+
+Crews are runtime-independent. The same role contracts may execute through:
+
+- one capable agent running sequential passes,
+- native sub-agents,
+- a future Firstmate adapter,
+- another multi-agent runtime.
+
+ORBIT owns the work contract. The runtime executes it.
+
+See `crews/README.md` and `crews/roles/`.
+
+## GO / NO-GO and Gate Control
+
+ORBIT does not treat discussion as authorization.
+
+Use only:
+
+```text
+OBSERVED
+  discussed or evidenced, but no decision exists
+
+PENDING
+  a decision is required
+
+GO
+  explicitly approved by valid human authority
+
+NO_GO
+  explicitly rejected, paused, or held
+```
+
+A GO is also scoped:
+
+- `research`
+- `planning`
+- `implementation`
+- `dispatch`
+
+GO to research something does not authorize implementation. GO to implement something does not automatically authorize external Dispatch.
+
+Humans may issue or revise gates during an ORBIT conversation through `$orbit-gate`.
+
+Gate events preserve provenance:
+
+- `FLIGHT_RECORDER`
+- `HUMAN_DIRECTIVE`
+- `HUMAN_REVIEW`
+
+Superseded decisions remain in the audit trail.
+
+See `protocols/go-no-go.md` and `protocols/gate-control.md`.
+
+## Mission Packet
+
+The durable artifact of an Orbit is the Mission Packet, not the transcript alone.
+
+A complete packet may contain:
+
+```text
+orbits/YYYY-MM-DD/
+  briefing.md
+  source-index.md
+  state-snapshot.md
+  mission-control-plan.md
+  crew-findings.md
+  flight-recorder-analysis.md
+  decision-action-register.md
+  gate-log.md
+  dispatch-return.md
+  candidate-mission-state.md
+```
+
+See `protocols/mission-packet.md`.
 
 ## Quick start
 
@@ -67,76 +205,69 @@ Requirements:
 - Git
 - a capable agent harness such as Codex
 
-### New installation
-
-Clone the live ORBIT repository:
+Clone ORBIT:
 
 ```sh
-cd ~/code
 git clone https://github.com/emmanuelsystems/orbit.git
 cd orbit
 ```
 
-Verify the install:
+Verify the distro:
 
 ```sh
 ./tests/smoke.sh
-./bin/orbit check
+./bin/orbit --help
 ```
 
-Initialize your first Mission:
+Initialize a Mission:
 
 ```sh
 ./bin/orbit init weekly-leadership "Weekly Leadership Huddle"
 ```
 
-### Already cloned ORBIT?
-
-If ORBIT is already on your machine, update it and verify the current version:
-
-```sh
-cd ~/code/orbit
-git pull --ff-only
-./tests/smoke.sh
-./bin/orbit check
-```
-
-Private Mission data lives outside the distro repo by default:
+Private Mission data lives outside the repo by default:
 
 ```text
 ~/.orbit/
 ```
 
-You normally do not need to configure this. For an intentionally separate private home, set `ORBIT_HOME` to a real directory on your machine, for example:
+Launch an Orbit:
 
 ```sh
-mkdir -p "$HOME/orbit-private"
-export ORBIT_HOME="$HOME/orbit-private"
+./bin/orbit launch weekly-leadership 2026-08-07
 ```
 
-Launch the next Orbit:
+Ingest the exact Flight Recorder:
 
 ```sh
-./bin/orbit launch weekly-leadership
+./bin/orbit ingest \
+  weekly-leadership \
+  ~/.orbit/missions/weekly-leadership/sources/flight-recorders/2026-08-07.txt \
+  2026-08-07
 ```
 
-After the meeting, register its Flight Recorder using the actual path to your transcript. Example:
+Inspect Mission Control readiness:
 
 ```sh
-./bin/orbit ingest weekly-leadership "$HOME/Downloads/weekly-huddle-transcript.txt"
+./bin/orbit analyze weekly-leadership 2026-08-07
 ```
 
-Then launch Codex from the ORBIT repo:
-
-```sh
-cd ~/code/orbit
-codex
-```
-
-Inside Codex, invoke:
+Then launch Codex from the ORBIT repo and invoke:
 
 ```text
 $orbit-analyze
+```
+
+During the conversation, record a live human decision with:
+
+```sh
+./bin/orbit gate weekly-leadership 2026-08-07
+```
+
+Then inside the agent:
+
+```text
+$orbit-gate
 ```
 
 Check Mission status:
@@ -145,112 +276,54 @@ Check Mission status:
 ./bin/orbit status weekly-leadership
 ```
 
-Close the Orbit after review:
+Close after human review:
 
 ```sh
-./bin/orbit close weekly-leadership
+./bin/orbit close weekly-leadership 2026-08-07
 ```
 
-`close` validates the packet. It does not silently promote candidate Mission State.
+Closing validates the packet. It does not silently promote candidate Mission State.
 
-## Public distro vs private state
+## Existing v0.1 Missions
 
-The cloned repo is the reusable machine:
+v0.2 is designed to be backward-compatible with Missions already under `~/.orbit`.
+
+On the next `orbit launch`, if the Mission does not yet have `crew.yaml`, ORBIT creates the default Crew Manifest without replacing the Mission Charter, accepted Mission State, transcripts, or prior Orbit artifacts.
+
+New Mission Control artifacts are added to the current Orbit only when missing.
+
+Private Flight Recorder bytes remain where the user stored them.
+
+## Agent skills
+
+User-facing ORBIT skills are intentionally small:
 
 ```text
-orbit/
-  protocols/
-  templates/
-  .agents/skills/
-  bin/
-  examples/
-  tests/
+$orbit-init
+$orbit-launch
+$orbit-analyze
+$orbit-gate
+$orbit-status
+$orbit-close
 ```
 
-Private operational data lives in `ORBIT_HOME`:
+Crew roles are generally internal to Mission Control rather than separate commands the user must manually orchestrate.
+
+## Multi-agent direction
+
+v0.2 establishes the contracts required for multi-agent execution but keeps the default execution path simple:
 
 ```text
-~/.orbit/
-  missions/
-    <mission-slug>/
-      config.yaml
-      charter.md
-      state/
-      orbits/
-      sources/
+$orbit-analyze
+    -> Mission Control triage
+    -> select Crew
+    -> sequential or multi-agent runtime
+    -> role-attributed findings
+    -> reconciliation
+    -> human Gate Control
 ```
 
-This separation lets ORBIT be shared publicly without publishing private transcripts or meeting state.
-
-## Eight-stage lifecycle
-
-1. **Recover**: load reviewed Mission State.
-2. **Brief**: create a bounded Briefing and identify decisions required.
-3. **Meet**: humans conduct the actual conversation.
-4. **Ingest**: pin the exact Flight Recorder and supporting Telemetry.
-5. **Analyze**: run Recorder and Systems analysis independently.
-6. **Gate**: classify consequential items as GO, NO-GO, PENDING, or OBSERVED.
-7. **Dispatch**: prepare or perform routing only for authorized GO items and only within configured permissions.
-8. **Remember**: prepare candidate Mission State for human review and the next Orbit.
-
-## Default artifacts per Orbit
-
-```text
-orbits/YYYY-MM-DD/
-  source-index.md
-  state-snapshot.md
-  briefing.md
-  flight-recorder-analysis.md
-  decision-action-register.md
-  dispatch-return.md
-  candidate-mission-state.md
-```
-
-## Decision model
-
-ORBIT does not treat discussion as authorization.
-
-```text
-OBSERVED
-  discussed or evidenced, but no decision made
-
-PENDING
-  requires a decision from an identified authority
-
-GO
-  explicitly approved by an authorized human
-
-NO-GO
-  explicitly rejected, paused, or held
-```
-
-Only `GO` items may enter an executable Flight Plan, and external Dispatch still requires the configured permission gate.
-
-## Agent execution model
-
-The default v0.1 mode uses one capable agent with two bounded passes:
-
-```text
-Flight Recorder
-  -> Recorder Analyst: evidence extraction
-  -> Systems Analyst: workflow audit
-  -> Mission Control reconciliation
-  -> GO / NO-GO register
-```
-
-ORBIT's architecture also supports multiple specialized sub-agents. A multi-agent runtime can execute independent roles such as Recorder Analyst, Systems Analyst, Decision Verifier, State Analyst, and Context Scout, then return their findings to Mission Control for reconciliation.
-
-A future Firstmate adapter can execute the same contract with separate workers:
-
-```text
-Firstmate
-  -> Recorder Analyst worker
-  -> Systems Analyst worker
-  -> Decision Verifier worker
-  -> reconciled ORBIT packet
-```
-
-The Mission lifecycle stays the same regardless of agent runtime.
+Automatic sub-agent spawning, parallel runtime adapters, model-tier routing, and subscription-aware cost routing are v0.3 work.
 
 ## Persistent-state rule
 
@@ -258,13 +331,15 @@ The Flight Recorder is history. Mission State is what survives.
 
 ```text
 Flight Recorder
--> analysis
--> candidate Mission State
--> human review
--> accepted Mission State
+  -> Crew analysis
+  -> Mission Control reconciliation
+  -> Gate Control
+  -> candidate Mission State
+  -> human review
+  -> accepted Mission State
 ```
 
-A transcript never becomes memory merely because it exists.
+A transcript never becomes persistent memory merely because it exists.
 
 ## Privacy
 
@@ -272,27 +347,50 @@ ORBIT is local-first.
 
 By default:
 
-- transcript bytes stay where the user stores them
-- Mission State lives outside the public distro repo
-- Dispatch is recommendation-only
-- credentials are never stored in tracked files
-- external writes require explicit authorization
+- private Mission data lives outside the public distro repo,
+- transcript bytes remain under user control,
+- credentials are never stored in tracked files,
+- Dispatch is recommendation-only,
+- external writes require explicit authorization,
+- candidate state requires human review before promotion.
 
-## Example 001
+## Mission 001
 
-`examples/systems-shaper-weekly-huddle/` is **Mission 001**, the real prototype that informed ORBIT. It demonstrates a two-person weekly operating huddle while keeping project-specific names and conventions out of the core engine.
+`examples/systems-shaper-weekly-huddle/` is Mission 001, the real weekly huddle prototype that informed ORBIT.
 
-## v0.1 success target
+It remains the first validation environment while ORBIT expands from a meeting workflow into a reusable conversation router and orchestration system.
 
-A new user should be able to:
+## Roadmap
 
-1. clone ORBIT,
-2. initialize one Mission,
-3. launch an Orbit in under 10 minutes,
-4. ingest one Flight Recorder,
-5. receive a GO / NO-GO decision register and Flight Plan,
-6. prepare candidate Mission State,
-7. begin the next Orbit without reconstructing the full meeting history.
+### v0.2 Mission Control
+
+- intake / triage protocol
+- planning protocol
+- Crew Manifest
+- Decision Verifier
+- live Gate Control
+- Mission Packet
+- scoped GO decisions
+- runtime-independent Crew contracts
+
+### v0.3 Orchestration
+
+- real sub-agent spawning
+- parallel Crew execution
+- dynamic Crew selection
+- runtime adapters
+- Firstmate adapter
+- model-tier and cost-aware routing
+- escalation rules
+
+### v0.4 Routing
+
+- Tactiq ingestion adapter
+- GitHub adapter
+- Linear adapter
+- Notion adapter
+- Slack adapter
+- controlled external Dispatch
 
 ## License
 
