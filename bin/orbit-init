@@ -13,14 +13,19 @@ umask 077
 mkdir -p "$mission/state" "$mission/orbits" "$mission/sources/flight-recorders"
 cp "$ROOT/templates/mission-charter.md" "$mission/charter.md"
 cp "$ROOT/templates/mission-state.md" "$mission/state/current.md"
+cp "$ROOT/templates/crew-manifest.yaml" "$mission/crew.yaml"
 cat > "$mission/config.yaml" <<CFG
 mission:
   name: $name
   slug: $slug
   cadence: weekly
 
+mission_control:
+  execution_mode: sequential
+  crew_manifest: crew.yaml
+
 permissions:
   dispatch: recommendation_only
   mission_state_promotion: human_approval_required
 CFG
-printf 'MISSION INITIALIZED\nMission: %s\nPrivate Mission home: %s\nNext: edit %s and run ./bin/orbit launch %s\n' "$name" "$mission" "$mission/charter.md" "$slug"
+printf 'MISSION INITIALIZED\nMission: %s\nPrivate Mission home: %s\nCrew Manifest: %s\nNext: edit %s and run ./bin/orbit launch %s\n' "$name" "$mission" "$mission/crew.yaml" "$mission/charter.md" "$slug"
