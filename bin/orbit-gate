@@ -2,6 +2,32 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ORBIT_HOME="${ORBIT_HOME:-$HOME/.orbit}"
+
+case "${1:-}" in
+  help|-h|--help)
+    cat <<'USAGE'
+ORBIT Gate Control
+
+Usage:
+  ./bin/orbit gate <mission-slug> [YYYY-MM-DD]
+
+Purpose:
+  Prepare Gate Control for an Orbit and identify the gate log used to record
+  scoped human GO / NO-GO directives.
+
+Example:
+  ./bin/orbit gate systems-shaper-weekly-huddle 2026-07-31
+
+Then, inside the agent runtime, invoke:
+  $orbit-gate
+
+Core rule:
+  No GO, no dispatch.
+USAGE
+    exit 0
+    ;;
+esac
+
 slug="${1:-}"
 date="${2:-}"
 [ -n "$slug" ] || { echo "usage: orbit gate <mission-slug> [YYYY-MM-DD]" >&2; exit 2; }
