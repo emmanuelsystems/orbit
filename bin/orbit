@@ -10,7 +10,7 @@ case "$cmd" in
   launch) exec "$ROOT/bin/orbit-launch" "$@" ;;
   ingest) exec "$ROOT/bin/orbit-ingest" "$@" ;;
   analyze) exec "$ROOT/bin/orbit-analyze" "$@" ;;
-  gate) exec "$ROOT/bin/orbit-gate" "$@" ;;
+  gate) exec bash "$ROOT/bin/orbit-gate" "$@" ;;
   status) exec "$ROOT/bin/orbit-status" "$@" ;;
   close) exec "$ROOT/bin/orbit-close" "$@" ;;
   check) exec "$ROOT/bin/orbit-check" "$@" ;;
