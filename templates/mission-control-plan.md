@@ -16,24 +16,48 @@
 
 ### Work required
 
+### Work not required
+
 ### Ambiguity / conflicts
 
 ### Human gates likely required
 
-## Crew Plan
+## Crew Selection
 
-| Role | Why needed | Inputs | Output | Independent? | Runtime tier |
+| Role | Why separate work is useful | Inputs | Output | Independent? | Runtime tier |
 |---|---|---|---|---|---|
 
-## Execution Strategy
+## Crew Orders
 
-- Mode: `SEQUENTIAL`
+| Order ID | Role | Objective | Dependencies | Status |
+|---|---|---|---|---|
+
+## Execution Graph
+
+Describe which orders can run independently and which must wait for dependencies.
+
+Example:
+
+```text
+001 Recorder Analyst ----\
+                          -> 003 Decision Verifier -> Reconciliation
+002 Systems Analyst -----/
+```
+
+## Runtime
+
+- Adapter: `sequential`
 - Maximum parallel workers:
-- Dependencies:
-- Stop conditions:
+- Escalation conditions:
+
+## Stop Conditions
+
+## Human Gates
 
 ## Expected Mission Packet
 
 ## Notes
 
 > No useful independence, no extra agent.
+> No reconciliation, no Crew conclusion.
+> No GO, no dispatch.
