@@ -10,19 +10,21 @@ case "$cmd" in
   launch) exec "$ROOT/bin/orbit-launch" "$@" ;;
   ingest) exec "$ROOT/bin/orbit-ingest" "$@" ;;
   analyze) exec "$ROOT/bin/orbit-analyze" "$@" ;;
+  gate) exec "$ROOT/bin/orbit-gate" "$@" ;;
   status) exec "$ROOT/bin/orbit-status" "$@" ;;
   close) exec "$ROOT/bin/orbit-close" "$@" ;;
   check) exec "$ROOT/bin/orbit-check" "$@" ;;
   help|-h|--help)
     cat <<USAGE
-ORBIT v0.1-alpha
-Every meeting closes the loop.
+ORBIT v0.2-alpha
+Every conversation closes the loop.
 
 Usage:
   ./bin/orbit init <mission-slug> [mission-name]
   ./bin/orbit launch <mission-slug> [YYYY-MM-DD]
   ./bin/orbit ingest <mission-slug> <transcript-path> [YYYY-MM-DD]
   ./bin/orbit analyze <mission-slug> [YYYY-MM-DD]
+  ./bin/orbit gate <mission-slug> [YYYY-MM-DD]
   ./bin/orbit status <mission-slug>
   ./bin/orbit close <mission-slug> [YYYY-MM-DD]
   ./bin/orbit check <mission-slug> [YYYY-MM-DD]
@@ -30,7 +32,11 @@ Usage:
 Private home:
   ORBIT_HOME defaults to ~/.orbit
 
-Core rule:
+Mission Control loop:
+  Intake -> Triage -> Plan -> Orchestrate -> Reconcile -> Gate -> Dispatch -> Remember
+
+Core rules:
+  No useful independence, no extra agent.
   No GO, no dispatch.
 USAGE
     ;;
