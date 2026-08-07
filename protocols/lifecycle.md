@@ -1,109 +1,88 @@
 # ORBIT Lifecycle Protocol
 
-ORBIT has eight stages. Each stage produces a bounded artifact or human outcome that becomes input to the next stage.
+ORBIT is a human-governed orchestration system for recurring conversations and the work they produce.
+
+The lifecycle has ten stages. Mission Control owns triage, planning, orchestration, and reconciliation. Humans retain decision authority.
 
 ## 1. Recover
 
-Read the last accepted `state/current.md` and identify:
-
-- active goals
-- active experiments
-- open decisions
-- NO-GO holds
-- commitments
-- unfinished actions
-- questions carried into this Orbit
+Read the last accepted `state/current.md` and identify active goals, experiments, open decisions, NO-GO holds, commitments, unfinished actions, and questions carried into this Orbit.
 
 Do not recover by rereading all historical Flight Recorders unless Mission State points to a source that must be reopened.
 
 ## 2. Brief
 
-Create or update:
+Create or update `state-snapshot.md`, `briefing.md`, and `source-index.md`.
 
-- `state-snapshot.md`
-- `briefing.md`
-- `source-index.md`
+The Briefing should answer what changed, what is blocked, what is already GO or NO-GO, what remains PENDING, what needs discussion now, and which sources support those claims.
 
-The Briefing should answer:
+## 3. Converse
 
-- What changed since the previous Orbit?
-- What is blocked?
-- What is already GO or NO-GO?
-- What remains PENDING?
-- What needs discussion now?
-- Which sources support those claims?
-
-## 3. Meet
-
-Humans conduct the meeting. Mission Control may prepare context but does not replace human discussion or authority.
+Humans conduct the meeting or other recurring conversation. Mission Control may prepare context but does not replace human discussion or authority.
 
 ## 4. Ingest
 
-Pin the Flight Recorder by exact local path, durable URL, file ID, or another stable locator.
+Pin the exact Flight Recorder or other primary conversation record by stable locator.
 
-Never substitute another meeting transcript when the intended Flight Recorder is missing.
+Never substitute another conversation record when the intended source is missing.
 
-## 5. Analyze
+## 5. Triage
 
-Default v0.1 mode uses two independent passes.
+Mission Control evaluates the available inputs and determines what work is actually needed.
 
-### Recorder Analyst
+Identify evidence extraction, systems analysis, decision verification, contradiction checks, context scouting, planning, or other specialist needs.
 
-Extract:
+Do not activate extra Crew roles without useful independence.
 
-- discussion themes
-- explicit decisions
-- proposals
-- actions
-- owners
-- blockers
-- holds
-- unresolved questions
-- commitments
-- supporting timestamps or evidence references
+## 6. Plan
 
-### Systems Analyst
+Update `mission-control-plan.md` with objective, source boundary, selected Crew roles, execution strategy, dependencies, expected artifacts, human gates, and stop conditions.
 
-Analyze:
+The Mission `crew.yaml` defines available roles and runtime policy.
 
-- context recovery burden
-- duplicated work
-- unclear authority
-- source gaps
-- handoff problems
-- automation opportunities
-- work that must remain human-owned
+## 7. Orchestrate
 
-The Systems Analyst may recommend changes but cannot convert a recommendation into GO.
+Execute selected Crew roles using the available runtime.
 
-## 6. Gate
+The v0.2 default remains sequential execution with one capable agent. Multi-agent runtimes may execute independent roles concurrently as long as they obey the same role contracts.
 
-Apply `protocols/go-no-go.md`.
+Standard huddle roles are Recorder Analyst, Systems Analyst, and Decision Verifier.
 
-Classify consequential items as:
+Write role-attributed results to `crew-findings.md`.
+
+## 8. Reconcile and Gate
+
+Mission Control reconciles Crew findings without hiding disagreement.
+
+Apply `protocols/go-no-go.md` and `protocols/gate-control.md`.
+
+Use only:
 
 - `GO`
 - `NO_GO`
 - `PENDING`
 - `OBSERVED`
 
-Populate:
+Live human directives are recorded separately from Flight Recorder evidence and apply only within their authorized scope.
 
-- `flight-recorder-analysis.md`
-- `decision-action-register.md`
+Populate or update `flight-recorder-analysis.md`, `decision-action-register.md`, and `gate-log.md`.
 
-## 7. Dispatch
+## 9. Dispatch
 
-Create `dispatch-return.md`.
+Create `dispatch-return.md` and the Flight Plan.
 
-Only GO items may enter an executable Flight Plan.
+Only GO items may enter executable work. External writes still require the configured permission gate or explicit human authorization.
 
-Even then, external writes require the configured permission gate or explicit human authorization.
+> **No GO, no dispatch.**
 
-## 8. Remember
+## 10. Remember
 
 Create `candidate-mission-state.md`.
 
 A human reviews the candidate before anything is promoted into `state/current.md`.
 
-The next Orbit starts from accepted Mission State, not from unreviewed transcript history.
+The next Orbit starts from accepted Mission State, not unreviewed conversation history.
+
+## Mission Packet
+
+The reviewable artifact for the full Orbit is the Mission Packet defined in `protocols/mission-packet.md`.
