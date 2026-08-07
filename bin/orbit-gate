@@ -12,8 +12,8 @@ Usage:
   ./bin/orbit gate <mission-slug> [YYYY-MM-DD]
 
 Purpose:
-  Prepare Gate Control for an Orbit and identify the gate log used to record
-  scoped human GO / NO-GO directives.
+  Prepare Gate Control for an Orbit, bind the active Mission/Orbit context,
+  and identify the gate log used to record scoped human GO / NO-GO directives.
 
 Example:
   ./bin/orbit gate systems-shaper-weekly-huddle 2026-07-31
@@ -40,4 +40,19 @@ orbit="$mission/orbits/$date"
 [ -f "$orbit/gate-log.md" ] || cp "$ROOT/templates/gate-log.md" "$orbit/gate-log.md"
 sed -i "s/^- Mission:$/- Mission: $slug/" "$orbit/gate-log.md" 2>/dev/null || true
 sed -i "s/^- Orbit date:$/- Orbit date: $date/" "$orbit/gate-log.md" 2>/dev/null || true
-printf 'GATE CONTROL\nMission: %s\nOrbit: %s\nGate log: %s\nNext: invoke $orbit-gate in your agent and state the decision, authority, and scope.\n' "$slug" "$date" "$orbit/gate-log.md"
+
+mkdir -p "$ORBIT_HOME"
+umask 077
+active_tmp="$ORBIT_HOME/.active-gate.tmp.$$"
+cat > "$active_tmp" <<EOF
+# ORBIT Active Gate Context
+
+- Mission: $slug
+- Orbit date: $date
+- Mission path: $mission
+- Orbit path: $orbit
+- Gate log: $orbit/gate-log.md
+EOF
+mv "$active_tmp" "$ORBIT_HOME/active-gate.md"
+
+printf 'GATE CONTROL\nMission: %s\nOrbit: %s\nGate log: %s\nActive context: %s\nNext: invoke $orbit-gate in your agent and state the decision, authority, and scope.\n' "$slug" "$date" "$orbit/gate-log.md" "$ORBIT_HOME/active-gate.md"
