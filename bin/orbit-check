@@ -9,8 +9,10 @@ mission="$ORBIT_HOME/missions/$slug"
 if [ -z "$date" ]; then date="$(find "$mission/orbits" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null | sort | tail -1 || true)"; fi
 [ -n "$date" ] || { echo "error: no Orbit exists" >&2; exit 1; }
 orbit="$mission/orbits/$date"
-required=(source-index.md state-snapshot.md briefing.md mission-control-plan.md crew-findings.md gate-log.md flight-recorder-analysis.md decision-action-register.md dispatch-return.md candidate-mission-state.md)
+required=(source-index.md state-snapshot.md briefing.md mission-control-plan.md crew-findings.md reconciliation.md gate-log.md flight-recorder-analysis.md decision-action-register.md dispatch-return.md candidate-mission-state.md)
 missing=0
 [ -f "$mission/crew.yaml" ] && printf 'OK      %s\n' 'crew.yaml' || { printf 'MISSING %s\n' 'crew.yaml'; missing=1; }
 for f in "${required[@]}"; do if [ -f "$orbit/$f" ]; then printf 'OK      %s\n' "$f"; else printf 'MISSING %s\n' "$f"; missing=1; fi; done
+[ -d "$orbit/crew-orders" ] && printf 'OK      %s\n' 'crew-orders/' || { printf 'MISSING %s\n' 'crew-orders/'; missing=1; }
+[ -d "$orbit/crew-returns" ] && printf 'OK      %s\n' 'crew-returns/' || { printf 'MISSING %s\n' 'crew-returns/'; missing=1; }
 exit "$missing"
