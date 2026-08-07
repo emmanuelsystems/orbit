@@ -12,7 +12,7 @@ mission="$ORBIT_HOME/missions/$slug"
 transcript="$(cd "$(dirname "$transcript")" && pwd)/$(basename "$transcript")"
 orbit="$mission/orbits/$date"
 "$ROOT/bin/orbit-launch" "$slug" "$date" >/dev/null
-for f in flight-recorder-analysis.md decision-action-register.md dispatch-return.md candidate-mission-state.md; do [ -e "$orbit/$f" ] || cp "$ROOT/templates/$f" "$orbit/$f"; done
+for f in flight-recorder-analysis.md decision-action-register.md dispatch-return.md candidate-mission-state.md mission-control-plan.md crew-findings.md gate-log.md; do [ -e "$orbit/$f" ] || cp "$ROOT/templates/$f" "$orbit/$f"; done
 awk -v p="$transcript" '/^- Transcript:/ { print "- Transcript: " p; next } /^- Status: `UNSET`/ { print "- Status: `PINNED_LOCAL_FILE`"; next } { print }' "$orbit/source-index.md" > "$orbit/source-index.md.tmp"
 mv "$orbit/source-index.md.tmp" "$orbit/source-index.md"
-printf 'FLIGHT RECORDER RECEIVED\nMission: %s\nOrbit: %s\nFlight Recorder: %s\nNo transcript bytes were copied into ORBIT_HOME.\nFLIGHT STATUS: READY FOR ANALYSIS\nNext: invoke $orbit-analyze in your agent.\n' "$slug" "$date" "$transcript"
+printf 'FLIGHT RECORDER RECEIVED\nMission: %s\nOrbit: %s\nFlight Recorder: %s\nNo transcript bytes were copied into ORBIT_HOME.\nFLIGHT STATUS: READY FOR MISSION CONTROL\nNext: invoke $orbit-analyze in your agent. Mission Control will triage, plan Crew work, reconcile findings, and apply Gate Control.\n' "$slug" "$date" "$transcript"

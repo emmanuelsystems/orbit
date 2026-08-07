@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ORBIT_HOME="${ORBIT_HOME:-$HOME/.orbit}"
+
+case "${1:-}" in
+  help|-h|--help)
+    cat <<'USAGE'
+ORBIT Gate Control
+
+Usage:
+  ./bin/orbit gate <mission-slug> [YYYY-MM-DD]
+
+Purpose:
+  Prepare Gate Control for an Orbit, bind the active Mission/Orbit context,
+  and identify the gate log used to record scoped human GO / NO-GO directives.
+
+Example:
+  ./bin/orbit gate systems-shaper-weekly-huddle 2026-07-31
+
+Then, inside the agent runtime, invoke:
+  $orbit-gate
+
+Core rule:
+  No GO, no dispatch.
+USAGE
+    exit 0
+    ;;
+esac
+
+slug="${1:-}"
+date="${2:-}"
+[ -n "$slug" ] || { echo "usage: orbit gate <mission-slug> [YYYY-MM-DD]" >&2; exit 2; }
+mission="$ORBIT_HOME/missions/$slug"
+[ -d "$mission" ] || { echo "error: unknown Mission: $slug" >&2; exit 1; }
+if [ -z "$date" ]; then date="$(find "$mission/orbits" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null | sort | tail -1 || true)"; fi
+[ -n "$date" ] || { echo "error: no Orbit exists" >&2; exit 1; }
+orbit="$mission/orbits/$date"
+[ -d "$orbit" ] || { echo "error: unknown Orbit: $date" >&2; exit 1; }
+[ -f "$orbit/gate-log.md" ] || cp "$ROOT/templates/gate-log.md" "$orbit/gate-log.md"
+sed -i "s/^- Mission:$/- Mission: $slug/" "$orbit/gate-log.md" 2>/dev/null || true
+sed -i "s/^- Orbit date:$/- Orbit date: $date/" "$orbit/gate-log.md" 2>/dev/null || true
+
+mkdir -p "$ORBIT_HOME"
+umask 077
+active_tmp="$ORBIT_HOME/.active-gate.tmp.$$"
+cat > "$active_tmp" <<EOF
+# ORBIT Active Gate Context
+
+- Mission: $slug
+- Orbit date: $date
+- Mission path: $mission
+- Orbit path: $orbit
+- Gate log: $orbit/gate-log.md
+EOF
+mv "$active_tmp" "$ORBIT_HOME/active-gate.md"
+
+printf 'GATE CONTROL\nMission: %s\nOrbit: %s\nGate log: %s\nActive context: %s\nNext: invoke $orbit-gate in your agent and state the decision, authority, and scope.\n' "$slug" "$date" "$orbit/gate-log.md" "$ORBIT_HOME/active-gate.md"

@@ -1,0 +1,43 @@
+crew:
+  name: standard-huddle
+
+  pre_orbit:
+    - state_analyst
+    - context_scout
+
+  post_orbit:
+    - recorder_analyst
+    - systems_analyst
+    - decision_verifier
+
+  post_go:
+    - flight_planner
+
+  dispatch:
+    - dispatch_agent
+
+execution:
+  mode: sequential
+  max_parallel_agents: 3
+  dynamic_selection: false
+
+runtime_policy:
+  strategy: cost_aware
+  strong_reasoning_for:
+    - orchestration
+    - reconciliation
+    - ambiguous_decisions
+  efficient_reasoning_for:
+    - extraction
+    - source_checks
+    - verification
+    - formatting
+  escalate_on:
+    - conflicting_findings
+    - low_confidence
+    - unresolved_authority
+
+gates:
+  human_go_required: true
+  external_dispatch_requires_go: true
+  mission_state_promotion_requires_human_review: true
