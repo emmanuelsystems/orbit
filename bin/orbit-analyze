@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+ORBIT_HOME="${ORBIT_HOME:-$HOME/.orbit}"
+slug="${1:-}"
+date="${2:-}"
+[ -n "$slug" ] || { echo "usage: orbit analyze <mission-slug> [YYYY-MM-DD]" >&2; exit 2; }
+mission="$ORBIT_HOME/missions/$slug"
+[ -d "$mission" ] || { echo "error: unknown Mission: $slug" >&2; exit 1; }
+if [ -z "$date" ]; then date="$(find "$mission/orbits" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null | sort | tail -1 || true)"; fi
+[ -n "$date" ] || { echo "error: no Orbit exists" >&2; exit 1; }
+orbit="$mission/orbits/$date"
+[ -f "$orbit/source-index.md" ] || { echo "error: missing source-index.md" >&2; exit 1; }
+if ! grep -q 'PINNED_' "$orbit/source-index.md"; then echo 'error: no pinned Flight Recorder; run orbit ingest first' >&2; exit 1; fi
+printf 'MISSION CONTROL\nMission: %s\nOrbit: %s\nRecorder Analyst: READY\nSystems Analyst: READY\nGO / NO-GO gate: REQUIRED\nInvoke $orbit-analyze in your agent to perform analysis.\n' "$slug" "$date"

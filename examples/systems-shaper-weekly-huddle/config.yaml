@@ -1,0 +1,41 @@
+mission:
+  id: mission-001
+  name: Systems Shaper Weekly Huddle
+  slug: systems-shaper-weekly-huddle
+  cadence: weekly
+
+roles:
+  commander: Emmanuel
+  facilitator: Emmanuel
+  decision_owners:
+    - Emmanuel
+    - David
+  participants:
+    - Emmanuel
+    - David
+
+telemetry:
+  flight_recorder_type: tactiq_or_local_file
+  reference_orbit:
+    meeting_date: 2026-07-31
+
+permissions:
+  mission_control_can:
+    - analyze_sources
+    - prepare_briefing
+    - extract_decisions
+    - extract_actions
+    - recommend_dispatch
+  human_approval_required_for:
+    - go_no_go_decisions
+    - external_writes
+    - implementation
+    - mission_state_promotion
+
+dispatch:
+  default: recommendation_only
+  destinations:
+    - GitHub
+    - Linear
+    - Slack
+    - Notion

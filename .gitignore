@@ -1,0 +1,12 @@
+# Local/private ORBIT state
+.orbit/
+.private/
+.env
+.env.*
+
+# Generated local test homes
+.tmp/
+
+# OS/editor
+.DS_Store
+.vscode/

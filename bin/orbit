@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cmd="${1:-help}"
+shift || true
+
+case "$cmd" in
+  init) exec "$ROOT/bin/orbit-init" "$@" ;;
+  launch) exec "$ROOT/bin/orbit-launch" "$@" ;;
+  ingest) exec "$ROOT/bin/orbit-ingest" "$@" ;;
+  analyze) exec "$ROOT/bin/orbit-analyze" "$@" ;;
+  status) exec "$ROOT/bin/orbit-status" "$@" ;;
+  close) exec "$ROOT/bin/orbit-close" "$@" ;;
+  check) exec "$ROOT/bin/orbit-check" "$@" ;;
+  help|-h|--help)
+    cat <<USAGE
+ORBIT v0.1-alpha
+Every meeting closes the loop.
+
+Usage:
+  ./bin/orbit init <mission-slug> [mission-name]
+  ./bin/orbit launch <mission-slug> [YYYY-MM-DD]
+  ./bin/orbit ingest <mission-slug> <transcript-path> [YYYY-MM-DD]
+  ./bin/orbit analyze <mission-slug> [YYYY-MM-DD]
+  ./bin/orbit status <mission-slug>
+  ./bin/orbit close <mission-slug> [YYYY-MM-DD]
+  ./bin/orbit check <mission-slug> [YYYY-MM-DD]
+
+Private home:
+  ORBIT_HOME defaults to ~/.orbit
+
+Core rule:
+  No GO, no dispatch.
+USAGE
+    ;;
+  *) echo "error: unknown command: $cmd" >&2; exit 2 ;;
+esac

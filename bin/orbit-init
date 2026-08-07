@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ORBIT_HOME="${ORBIT_HOME:-$HOME/.orbit}"
+slug="${1:-}"
+name="${2:-}"
+[ -n "$slug" ] || { echo "usage: orbit init <mission-slug> [mission-name]" >&2; exit 2; }
+case "$slug" in *[!a-zA-Z0-9_-]*) echo "error: Mission slug may use letters, numbers, _ and - only" >&2; exit 2 ;; esac
+[ -n "$name" ] || name="$slug"
+mission="$ORBIT_HOME/missions/$slug"
+if [ -e "$mission" ]; then echo "error: Mission already exists: $mission" >&2; exit 1; fi
+umask 077
+mkdir -p "$mission/state" "$mission/orbits" "$mission/sources/flight-recorders"
+cp "$ROOT/templates/mission-charter.md" "$mission/charter.md"
+cp "$ROOT/templates/mission-state.md" "$mission/state/current.md"
+cat > "$mission/config.yaml" <<CFG
+mission:
+  name: $name
+  slug: $slug
+  cadence: weekly
+
+permissions:
+  dispatch: recommendation_only
+  mission_state_promotion: human_approval_required
+CFG
+printf 'MISSION INITIALIZED\nMission: %s\nPrivate Mission home: %s\nNext: edit %s and run ./bin/orbit launch %s\n' "$name" "$mission" "$mission/charter.md" "$slug"

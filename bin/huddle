@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+echo 'notice: huddle-machine was renamed ORBIT; forwarding to ./bin/orbit' >&2
+exec "$ROOT/bin/orbit" "$@"

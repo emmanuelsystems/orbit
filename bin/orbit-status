@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+ORBIT_HOME="${ORBIT_HOME:-$HOME/.orbit}"
+slug="${1:-}"
+[ -n "$slug" ] || { echo "usage: orbit status <mission-slug>" >&2; exit 2; }
+mission="$ORBIT_HOME/missions/$slug"
+[ -d "$mission" ] || { echo "error: unknown Mission: $slug" >&2; exit 1; }
+printf 'ORBIT // MISSION CONTROL\nMission: %s\nHome: %s\nAccepted Mission State: %s\n' "$slug" "$mission" "$mission/state/current.md"
+latest="$(find "$mission/orbits" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null | sort | tail -1 || true)"
+if [ -n "$latest" ]; then printf 'Latest Orbit: %s\nArtifacts:\n' "$latest"; find "$mission/orbits/$latest" -maxdepth 1 -type f -printf '  - %f\n' | sort; if [ -f "$mission/orbits/$latest/decision-action-register.md" ]; then printf 'Decision gate artifact: READY FOR REVIEW\n'; fi; else echo 'Latest Orbit: none'; fi

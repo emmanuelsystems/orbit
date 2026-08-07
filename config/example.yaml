@@ -1,0 +1,35 @@
+mission:
+  name: Weekly Leadership Huddle
+  slug: weekly-leadership
+  cadence: weekly
+
+roles:
+  commander: Person A
+  facilitator: Person A
+  decision_owners:
+    - Person A
+    - Person B
+  participants:
+    - Person A
+    - Person B
+
+telemetry:
+  flight_recorder_type: local_file
+  supporting_sources: []
+
+permissions:
+  mission_control_can:
+    - analyze_sources
+    - prepare_briefing
+    - extract_decisions
+    - extract_actions
+    - recommend_dispatch
+  human_approval_required_for:
+    - go_no_go_decisions
+    - external_writes
+    - implementation
+    - mission_state_promotion
+
+dispatch:
+  default: recommendation_only
+  destinations: []

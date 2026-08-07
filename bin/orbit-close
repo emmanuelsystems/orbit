@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ORBIT_HOME="${ORBIT_HOME:-$HOME/.orbit}"
+slug="${1:-}"
+date="${2:-}"
+[ -n "$slug" ] || { echo "usage: orbit close <mission-slug> [YYYY-MM-DD]" >&2; exit 2; }
+mission="$ORBIT_HOME/missions/$slug"
+[ -d "$mission" ] || { echo "error: unknown Mission: $slug" >&2; exit 1; }
+if [ -z "$date" ]; then date="$(find "$mission/orbits" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null | sort | tail -1 || true)"; fi
+[ -n "$date" ] || { echo "error: no Orbit exists" >&2; exit 1; }
+if ! "$ROOT/bin/orbit-check" "$slug" "$date" >/dev/null; then echo 'FLIGHT STATUS: NO-GO'; echo 'Orbit packet is incomplete. Run orbit check for missing artifacts.'; exit 1; fi
+printf 'ORBIT PACKET COMPLETE\nMission: %s\nOrbit: %s\nFLIGHT STATUS: PENDING HUMAN REVIEW\nCandidate Mission State has NOT been promoted.\nReview GO / NO-GO decisions and candidate-mission-state.md before promotion.\n' "$slug" "$date"

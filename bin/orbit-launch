@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ORBIT_HOME="${ORBIT_HOME:-$HOME/.orbit}"
+slug="${1:-}"
+date="${2:-$(date +%F)}"
+[ -n "$slug" ] || { echo "usage: orbit launch <mission-slug> [YYYY-MM-DD]" >&2; exit 2; }
+mission="$ORBIT_HOME/missions/$slug"
+[ -d "$mission" ] || { echo "error: unknown Mission: $slug" >&2; exit 1; }
+orbit="$mission/orbits/$date"
+umask 077
+mkdir -p "$orbit"
+for f in source-index.md briefing.md; do [ -e "$orbit/$f" ] || cp "$ROOT/templates/$f" "$orbit/$f"; done
+[ -e "$orbit/state-snapshot.md" ] || cp "$mission/state/current.md" "$orbit/state-snapshot.md"
+sed -i "s/^- Mission:$/- Mission: $slug/" "$orbit/source-index.md" 2>/dev/null || true
+sed -i "s/^- Orbit date:$/- Orbit date: $date/" "$orbit/source-index.md" 2>/dev/null || true
+printf 'ORBIT LAUNCHED\nMission: %s\nOrbit: %s\nOrbit folder: %s\nFLIGHT STATUS: PRE-BRIEF\nNext: invoke $orbit-launch in your agent to complete the Briefing.\n' "$slug" "$date" "$orbit"

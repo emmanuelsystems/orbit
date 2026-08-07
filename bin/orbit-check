@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+ORBIT_HOME="${ORBIT_HOME:-$HOME/.orbit}"
+slug="${1:-}"
+date="${2:-}"
+[ -n "$slug" ] || { echo "usage: orbit check <mission-slug> [YYYY-MM-DD]" >&2; exit 2; }
+mission="$ORBIT_HOME/missions/$slug"
+[ -d "$mission" ] || { echo "error: unknown Mission: $slug" >&2; exit 1; }
+if [ -z "$date" ]; then date="$(find "$mission/orbits" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null | sort | tail -1 || true)"; fi
+[ -n "$date" ] || { echo "error: no Orbit exists" >&2; exit 1; }
+orbit="$mission/orbits/$date"
+required=(source-index.md state-snapshot.md briefing.md flight-recorder-analysis.md decision-action-register.md dispatch-return.md candidate-mission-state.md)
+missing=0
+for f in "${required[@]}"; do if [ -f "$orbit/$f" ]; then printf 'OK      %s\n' "$f"; else printf 'MISSING %s\n' "$f"; missing=1; fi; done
+exit "$missing"
