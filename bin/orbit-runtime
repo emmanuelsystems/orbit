@@ -95,6 +95,14 @@ slugify_task_id() {
     | sed 's/[^a-z0-9._-]/-/g; s/--*/-/g; s/^-//; s/-$//'
 }
 
+fingerprint() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{ print $1 }'
+  else
+    shasum -a 256 "$1" | awk '{ print $1 }'
+  fi
+}
+
 resolve_context() {
   MISSION_PATH="$ORBIT_HOME/missions/$MISSION_SLUG"
   ORBIT_PATH="$MISSION_PATH/orbits/$ORBIT_ID"
@@ -215,6 +223,82 @@ resolve_firstmate() {
   FIRSTMATE_BRIEF_PATH="$FIRSTMATE_HOME/data/$FIRSTMATE_TASK_ID/brief.md"
   FIRSTMATE_REPORT_PATH="$FIRSTMATE_HOME/data/$FIRSTMATE_TASK_ID/report.md"
   FIRSTMATE_META_PATH="$FIRSTMATE_HOME/state/$FIRSTMATE_TASK_ID.meta"
+  FIRSTMATE_BINDING_DIR="$ORBIT_PATH/runtime/firstmate"
+  FIRSTMATE_BINDING_PATH="$FIRSTMATE_BINDING_DIR/$FIRSTMATE_TASK_ID.binding"
+}
+
+binding_field() {
+  local key=$1
+  [ -f "$FIRSTMATE_BINDING_PATH" ] || return 1
+  awk -F= -v wanted="$key" '$1 == wanted { sub(/^[^=]*=/, ""); print; exit }' "$FIRSTMATE_BINDING_PATH"
+}
+
+write_binding() {
+  local status=$1 binding_tmp
+  mkdir -p "$FIRSTMATE_BINDING_DIR"
+  [ ! -L "$FIRSTMATE_BINDING_DIR" ] || {
+    echo "error: Firstmate binding directory may not be a symbolic link: $FIRSTMATE_BINDING_DIR" >&2
+    exit 1
+  }
+  [ ! -L "$FIRSTMATE_BINDING_PATH" ] || {
+    echo "error: Firstmate binding may not be a symbolic link: $FIRSTMATE_BINDING_PATH" >&2
+    exit 1
+  }
+  umask 077
+  binding_tmp="$FIRSTMATE_BINDING_PATH.tmp.$$"
+  {
+    printf 'version=1\n'
+    printf 'status=%s\n' "$status"
+    printf 'crew_order_id=%s\n' "$ORDER_ID"
+    printf 'mission_id=%s\n' "$ORDER_MISSION_ID"
+    printf 'orbit_id=%s\n' "$ORDER_ORBIT_ID"
+    printf 'role=%s\n' "$ROLE"
+    printf 'order_type=READ_ONLY_SCOUT\n'
+    printf 'firstmate_task_id=%s\n' "$FIRSTMATE_TASK_ID"
+    printf 'envelope_sha256=%s\n' "$RUNTIME_ENVELOPE_SHA256"
+    printf 'brief_sha256=%s\n' "$FIRSTMATE_BRIEF_SHA256"
+  } > "$binding_tmp"
+  mv "$binding_tmp" "$FIRSTMATE_BINDING_PATH"
+}
+
+validate_binding() {
+  local expected_status actual value envelope_tmp
+  expected_status=$1
+  [ -f "$FIRSTMATE_BINDING_PATH" ] || {
+    echo "error: missing Firstmate order binding; run \`runtime firstmate prepare\` first" >&2
+    exit 1
+  }
+  [ ! -L "$FIRSTMATE_BINDING_PATH" ] || {
+    echo "error: Firstmate binding may not be a symbolic link: $FIRSTMATE_BINDING_PATH" >&2
+    exit 1
+  }
+  for value in \
+    "version=1" \
+    "status=$expected_status" \
+    "crew_order_id=$ORDER_ID" \
+    "mission_id=$ORDER_MISSION_ID" \
+    "orbit_id=$ORDER_ORBIT_ID" \
+    "role=$ROLE" \
+    "order_type=READ_ONLY_SCOUT" \
+    "firstmate_task_id=$FIRSTMATE_TASK_ID"; do
+    grep -Fx -- "$value" "$FIRSTMATE_BINDING_PATH" >/dev/null || {
+      echo "error: Firstmate order binding does not match this immutable Crew Order" >&2
+      exit 1
+    }
+  done
+  envelope_tmp="$FIRSTMATE_BINDING_PATH.envelope.$$"
+  render_runtime_envelope > "$envelope_tmp"
+  RUNTIME_ENVELOPE_SHA256=$(fingerprint "$envelope_tmp")
+  rm -f "$envelope_tmp"
+  [ "$(binding_field envelope_sha256 || true)" = "$RUNTIME_ENVELOPE_SHA256" ] || {
+    echo 'error: Crew Order changed after Firstmate preparation; prepare a new task' >&2
+    exit 1
+  }
+  FIRSTMATE_BRIEF_SHA256=$(fingerprint "$FIRSTMATE_BRIEF_PATH")
+  [ "$(binding_field brief_sha256 || true)" = "$FIRSTMATE_BRIEF_SHA256" ] || {
+    echo 'error: prepared Firstmate brief changed after ORBIT sealed it' >&2
+    exit 1
+  }
 }
 
 print_mapping() {
@@ -282,6 +366,10 @@ prepare_firstmate() {
     echo "error: Firstmate brief already exists for task $FIRSTMATE_TASK_ID" >&2
     exit 1
   }
+  [ ! -e "$FIRSTMATE_BINDING_PATH" ] || {
+    echo "error: Firstmate order binding already exists for task $FIRSTMATE_TASK_ID" >&2
+    exit 1
+  }
   FM_HOME="$FIRSTMATE_HOME" "$BRIEF_SCRIPT" "$FIRSTMATE_TASK_ID" "$(basename "$FIRSTMATE_PROJECT")" --scout >/dev/null
   [ -f "$FIRSTMATE_BRIEF_PATH" ] || { echo "error: Firstmate did not create expected brief: $FIRSTMATE_BRIEF_PATH" >&2; exit 1; }
 
@@ -296,8 +384,7 @@ prepare_firstmate() {
       printf '%s\n' "$line" >> "$brief_tmp"
     fi
   done < "$FIRSTMATE_BRIEF_PATH"
-  rm -f "$envelope"
-  [ "$replaced" -eq 1 ] || { rm -f "$brief_tmp"; echo "error: Firstmate scout scaffold did not contain {TASK}" >&2; exit 1; }
+  [ "$replaced" -eq 1 ] || { rm -f "$envelope" "$brief_tmp"; echo "error: Firstmate scout scaffold did not contain {TASK}" >&2; exit 1; }
   cat >> "$brief_tmp" <<'EOF'
 
 # ORBIT Phase 2 hard stop
@@ -305,6 +392,10 @@ prepare_firstmate() {
 This READ_ONLY_SCOUT order is read-only despite any generic scout-laboratory wording above: do not edit project files or make scratch commits. Write only the Firstmate report and status required by the scout contract. This task is not eligible for promotion to a Firstmate ship task. If the report recommends implementation, return that recommendation to ORBIT as an unauthorized finding. A separate ORBIT order and explicit scoped human GO would be required by a later phase; this adapter provides no implementation or promotion command.
 EOF
   mv "$brief_tmp" "$FIRSTMATE_BRIEF_PATH"
+  RUNTIME_ENVELOPE_SHA256=$(fingerprint "$envelope")
+  rm -f "$envelope"
+  FIRSTMATE_BRIEF_SHA256=$(fingerprint "$FIRSTMATE_BRIEF_PATH")
+  write_binding PREPARED
 
   print_mapping PREPARED
   printf 'Firstmate brief path: %s\nNext: inspect the brief, then run the matching `runtime firstmate submit` command.\n' "$FIRSTMATE_BRIEF_PATH"
@@ -316,24 +407,14 @@ submit_firstmate() {
     echo "error: missing prepared Firstmate brief; run `runtime firstmate prepare` first" >&2
     exit 1
   }
-  grep -F -- "- Crew Order ID: $ORDER_ID" "$FIRSTMATE_BRIEF_PATH" >/dev/null || {
-    echo "error: prepared Firstmate brief does not match Crew Order ID $ORDER_ID" >&2
-    exit 1
-  }
-  grep -F -- "- Mission ID: $ORDER_MISSION_ID" "$FIRSTMATE_BRIEF_PATH" >/dev/null || {
-    echo "error: prepared Firstmate brief does not match Mission ID $ORDER_MISSION_ID" >&2
-    exit 1
-  }
-  grep -F -- "- Orbit ID: $ORDER_ORBIT_ID" "$FIRSTMATE_BRIEF_PATH" >/dev/null || {
-    echo "error: prepared Firstmate brief does not match Orbit ID $ORDER_ORBIT_ID" >&2
-    exit 1
-  }
+  validate_binding PREPARED
 
   spawn_args=("$FIRSTMATE_TASK_ID" "$FIRSTMATE_PROJECT" --scout)
   if [ -n "${ORBIT_FIRSTMATE_BACKEND:-}" ]; then
     spawn_args+=(--backend "$ORBIT_FIRSTMATE_BACKEND")
   fi
   FM_HOME="$FIRSTMATE_HOME" "$SPAWN_SCRIPT" "${spawn_args[@]}"
+  write_binding SUBMITTED
   print_mapping SUBMITTED
   echo 'Firstmate owns supervision, completion handling, queues, backend lifecycle, and recovery for this task.'
 }
@@ -348,6 +429,11 @@ collect_firstmate() {
   local firstmate_state started_at completed_at return_tmp
   [ -f "$FIRSTMATE_REPORT_PATH" ] || { echo "error: Firstmate report not found: $FIRSTMATE_REPORT_PATH" >&2; exit 1; }
   [ ! -L "$FIRSTMATE_REPORT_PATH" ] || { echo "error: Firstmate report may not be a symbolic link: $FIRSTMATE_REPORT_PATH" >&2; exit 1; }
+  validate_binding SUBMITTED
+  [ "$(meta_field kind || true)" = scout ] || {
+    echo 'error: Firstmate task metadata does not identify this task as a scout' >&2
+    exit 1
+  }
   firstmate_state=$(FM_HOME="$FIRSTMATE_HOME" "$CREW_STATE_SCRIPT" "$FIRSTMATE_TASK_ID")
   case "$firstmate_state" in
     state:\ done\ *) ;;

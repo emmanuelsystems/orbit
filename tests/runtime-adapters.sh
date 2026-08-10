@@ -116,6 +116,15 @@ grep -F -- 'not eligible for promotion to a Firstmate ship task' "$brief_001" >/
 grep -F -- 'None.' "$brief_001" >/dev/null
 grep -F -- 'Return synthetic structural findings' "$brief_001" >/dev/null
 
+sed -i 's/synthetic:\/\/acceptance\/flight-recorder-structure/synthetic:\/\/unapproved-source/' \
+  "$orbit/crew-orders/001-recorder-analyst.md"
+if "$ROOT/bin/orbit" runtime firstmate submit "$slug" "$orbit_id" 001-recorder-analyst.md >"$TMP/changed-order.out" 2>&1; then
+  echo 'FAIL: Firstmate adapter submitted a Crew Order changed after preparation' >&2
+  exit 1
+fi
+grep -F 'Crew Order changed after Firstmate preparation' "$TMP/changed-order.out" >/dev/null
+cp "$FIXTURE/crew-orders/001-recorder-analyst.md" "$orbit/crew-orders/001-recorder-analyst.md"
+
 "$ROOT/bin/orbit" runtime firstmate submit "$slug" "$orbit_id" 001-recorder-analyst.md >/dev/null
 "$ROOT/bin/orbit" runtime firstmate submit "$slug" "$orbit_id" 002-systems-analyst.md >/dev/null
 grep -F -- "$task_001 $ROOT --scout" "$ORBIT_FIRSTMATE_HOME/spawn-calls.log" >/dev/null
@@ -132,6 +141,14 @@ printf 'working: synthetic scout started\ndone: synthetic recorder report comple
 printf 'working: synthetic scout started\ndone: synthetic systems report complete\n' > "$ORBIT_FIRSTMATE_HOME/state/$task_002.status"
 printf 'kind=scout\nstarted_at=2026-08-10T10:00:00Z\ncompleted_at=2026-08-10T10:01:00Z\n' > "$ORBIT_FIRSTMATE_HOME/state/$task_001.meta"
 printf 'kind=scout\nstarted_at=2026-08-10T10:00:30Z\ncompleted_at=2026-08-10T10:02:00Z\n' > "$ORBIT_FIRSTMATE_HOME/state/$task_002.meta"
+
+sed -i 's/kind=scout/kind=implementation/' "$ORBIT_FIRSTMATE_HOME/state/$task_001.meta"
+if "$ROOT/bin/orbit" runtime firstmate collect "$slug" "$orbit_id" 001-recorder-analyst.md >"$TMP/non-scout.out" 2>&1; then
+  echo 'FAIL: Firstmate adapter accepted a non-scout task report' >&2
+  exit 1
+fi
+grep -F 'metadata does not identify this task as a scout' "$TMP/non-scout.out" >/dev/null
+sed -i 's/kind=implementation/kind=scout/' "$ORBIT_FIRSTMATE_HOME/state/$task_001.meta"
 
 "$ROOT/bin/orbit" runtime firstmate collect "$slug" "$orbit_id" 001-recorder-analyst.md >/dev/null
 "$ROOT/bin/orbit" runtime firstmate collect "$slug" "$orbit_id" 002-systems-analyst.md >/dev/null
