@@ -140,6 +140,16 @@ Mission-local availability and runtime preferences live in:
 ~/.orbit/missions/<mission>/crew.yaml
 ```
 
+This Crew Manifest is the single owner of Mission runtime selection. `bin/orbit-analyze` reads `execution.mode`; Mission `config.yaml` does not select a runtime adapter. The default policy is explicit and keeps the sequential route available:
+
+```yaml
+execution:
+  mode: firstmate
+  fallback: sequential
+```
+
+Selecting the fallback is an explicit policy change to `mode: sequential`; ORBIT does not perform automatic failover.
+
 Mission Control does not run every available role. `$orbit-plan` first triages the Orbit and issues only the Crew Orders that are justified.
 
 Crew Orders live at:

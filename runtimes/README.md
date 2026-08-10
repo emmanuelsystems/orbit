@@ -4,6 +4,18 @@ ORBIT owns Mission/Orbit identity, the Charter, accepted and candidate Mission S
 
 A runtime adapter executes bounded Crew Orders and returns role-attributed outputs. Runtime task state is execution provenance; it cannot replace ORBIT authority state.
 
+## Mission runtime configuration
+
+Mission `crew.yaml` is the single runtime configuration owner. `bin/orbit-analyze` reads its `execution.mode` value:
+
+```yaml
+execution:
+  mode: firstmate
+  fallback: sequential
+```
+
+Set `mode: sequential` to choose the reference/fallback adapter. The `fallback` entry records that policy; ORBIT does not automatically fail over. Mission `config.yaml` does not select a runtime, and Herdr remains optional Firstmate-owned environment configuration rather than an ORBIT setting.
+
 ## Adapter-neutral contract
 
 Every adapter must preserve and expose:

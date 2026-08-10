@@ -14,6 +14,20 @@ export ORBIT_FIRSTMATE_HOME="$TMP/firstmate-home"
 export ORBIT_FIRSTMATE_PROJECT="$ROOT"
 mkdir -p "$ORBIT_FIRSTMATE_ROOT/bin" "$ORBIT_FIRSTMATE_HOME/data" "$ORBIT_FIRSTMATE_HOME/state"
 
+# Mission runtime selection has one owner: crew.yaml execution.mode.
+grep -Fx 'execution:' "$ROOT/templates/crew-manifest.yaml" >/dev/null
+grep -F 'mode: firstmate' "$ROOT/templates/crew-manifest.yaml" >/dev/null
+grep -F 'fallback: sequential' "$ROOT/templates/crew-manifest.yaml" >/dev/null
+for mission_config in \
+  "$ROOT/config/example.yaml" \
+  "$ROOT/examples/systems-shaper-weekly-huddle/config.yaml"; do
+  grep -F 'crew_manifest: crew.yaml' "$mission_config" >/dev/null
+  if grep -Eq '^(execution|orchestration):|^[[:space:]]+(execution_mode|fallback_execution_mode|runtime|fallback_runtime):' "$mission_config"; then
+    echo "FAIL: Mission config duplicates crew.yaml runtime policy: $mission_config" >&2
+    exit 1
+  fi
+done
+
 cat > "$ORBIT_FIRSTMATE_ROOT/bin/fm-brief.sh" <<'FAKE_BRIEF'
 #!/usr/bin/env bash
 set -euo pipefail

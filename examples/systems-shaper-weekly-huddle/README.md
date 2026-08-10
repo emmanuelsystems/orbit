@@ -16,6 +16,6 @@ The original prototype explored:
 - Codex-only fallback
 - durable next-Orbit Mission State
 
-Use `config.yaml` as an example of how a real team can specialize ORBIT.
+Use `config.yaml` as an example of how a real team can specialize ORBIT. Runtime adapter selection remains in the private Mission `crew.yaml` under `execution.mode`; this example config only points to that Crew Manifest and does not define a second runtime schema.
 
 The tracked Firstmate acceptance fixture under `tests/fixtures/firstmate/` uses this Mission slug and reference date but contains only synthetic structural findings. It does not contain or reproduce the July 31 Flight Recorder or any private Mission artifact.
