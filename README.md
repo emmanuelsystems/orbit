@@ -249,7 +249,7 @@ Requirements:
 - Linux or macOS, or Windows through WSL
 - Bash
 - Git
-- a capable agent harness such as Codex
+- a capable agent harness such as Pi or Codex
 - an installed Firstmate home for managed scout execution, or Mission `crew.yaml` configured for the sequential fallback
 
 Clone and verify:
@@ -289,11 +289,21 @@ Bind Mission Control planning context:
 ./bin/orbit plan weekly-leadership 2026-08-07
 ```
 
-Then inside Codex:
+Then use the configured operator harness:
+
+Pi:
+
+```text
+/orbit-plan
+```
+
+Codex or another skill-based harness:
 
 ```text
 $orbit-plan
 ```
+
+Both forms load the same ORBIT planning behavior.
 
 That step triages the work and creates bounded Crew Orders without executing them.
 
@@ -312,7 +322,12 @@ The analyze output identifies the configured runtime. For Firstmate, explicitly 
 ./bin/orbit runtime firstmate collect weekly-leadership 2026-08-07 001-recorder-analyst.md
 ```
 
-Then invoke `$orbit-analyze` for ORBIT-owned reconciliation, Gate Control, and Mission Packet preparation. Missions configured for `sequential` continue to execute bounded fallback passes through `$orbit-analyze`.
+Then invoke the configured operator command for ORBIT-owned reconciliation, Gate Control, and Mission Packet preparation:
+
+- Pi: `/orbit-analyze`
+- Codex or another skill-based harness: `$orbit-analyze`
+
+Missions configured for `sequential` continue to execute bounded fallback passes through the same skill behavior.
 
 For a live human decision:
 
@@ -320,11 +335,10 @@ For a live human decision:
 ./bin/orbit gate weekly-leadership 2026-08-07
 ```
 
-Then inside the agent:
+Then use the configured operator command:
 
-```text
-$orbit-gate
-```
+- Pi: `/orbit-gate`
+- Codex or another skill-based harness: `$orbit-gate`
 
 Check Mission status:
 
@@ -342,7 +356,20 @@ Closing validates the packet. It does not silently promote candidate Mission Sta
 
 ## Agent skills
 
-User-facing ORBIT skills remain intentionally small:
+User-facing ORBIT commands remain intentionally small.
+
+Pi project commands:
+
+```text
+/orbit-launch
+/orbit-plan
+/orbit-analyze
+/orbit-status
+/orbit-gate
+/orbit-close
+```
+
+Codex or another skill-based harness:
 
 ```text
 $orbit-init
@@ -353,6 +380,8 @@ $orbit-gate
 $orbit-status
 $orbit-close
 ```
+
+Both forms use the same ORBIT CLI, skills, runtime adapters, and authority rules.
 
 Crew roles are generally internal to Mission Control rather than commands the user must manually orchestrate.
 
