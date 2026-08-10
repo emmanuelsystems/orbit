@@ -11,7 +11,12 @@ printf 'Speaker A: We agreed to test the workflow next week.\n' > "$transcript"
 "$ROOT/bin/orbit" launch test-mission 2026-08-07 >/dev/null
 "$ROOT/bin/orbit" ingest test-mission "$transcript" 2026-08-07 >/dev/null
 "$ROOT/bin/orbit" plan test-mission 2026-08-07 >/dev/null
-"$ROOT/bin/orbit" analyze test-mission 2026-08-07 >/dev/null
+if "$ROOT/bin/orbit" analyze test-mission 2026-08-07 >"$TMP/analyze-no-orders.out" 2>&1; then
+  echo 'FAIL: analyze succeeded without Crew Orders' >&2
+  exit 1
+fi
+grep -F 'NO CREW ORDERS' "$TMP/analyze-no-orders.out" >/dev/null
+grep -F 'Run /orbit-plan first.' "$TMP/analyze-no-orders.out" >/dev/null
 "$ROOT/bin/orbit" gate test-mission 2026-08-07 >/dev/null
 "$ROOT/bin/orbit" check test-mission 2026-08-07 >/dev/null
 "$ROOT/bin/orbit" close test-mission 2026-08-07 >/dev/null
