@@ -19,6 +19,12 @@ telemetry:
   reference_orbit:
     meeting_date: 2026-07-31
 
+orchestration:
+  runtime: firstmate
+  fallback_runtime: sequential
+  firstmate_order_types:
+    - READ_ONLY_SCOUT
+
 permissions:
   mission_control_can:
     - analyze_sources

@@ -17,7 +17,8 @@ crew:
     - dispatch_agent
 
 execution:
-  mode: sequential
+  mode: firstmate
+  fallback: sequential
   max_parallel_agents: 3
   dynamic_selection: false
 

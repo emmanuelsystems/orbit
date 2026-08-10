@@ -100,12 +100,14 @@ Crew members analyze, verify, plan, or prepare. They do not receive human author
 
 Runtime adapters must preserve:
 
-- Crew Order intent,
-- allowed inputs,
-- dependencies,
-- role-attributed outputs,
-- failure states,
+- Crew Order, Mission, and Orbit identity,
+- role, objective, allowed sources, and prohibited actions,
+- dependencies and expected return contract,
+- role-attributed outputs and explicit task/failure states,
+- runtime task/report provenance,
 - the separation between Crew findings and human authority.
+
+The Phase 2 Firstmate adapter accepts only `READ_ONLY_SCOUT` orders. It may not modify project files, make scratch commits, execute implementation/ship work, Dispatch, reconcile, or promote Mission State. Firstmate completion and recommendations cannot create or broaden GO.
 
 ## Reconciliation rule
 
@@ -149,3 +151,10 @@ An Orbit is review-ready when:
 - candidate Mission State exists,
 - no candidate state has been silently promoted,
 - no external Dispatch is represented as authorized without a valid GO plus permission gate.
+
+## Maintaining this file
+
+Keep this file for knowledge useful to almost every future agent session in this project.
+Do not repeat what the codebase already shows; point to the authoritative file or command instead.
+Prefer rewriting or pruning existing entries over appending new ones.
+When updating this file, preserve this bar for all agents and keep entries concise.

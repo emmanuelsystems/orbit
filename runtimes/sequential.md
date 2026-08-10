@@ -1,8 +1,8 @@
 # Sequential Runtime Adapter
 
-`sequential` is ORBIT v0.3's reference execution mode.
+`sequential` is ORBIT v0.3's reference and fallback execution mode.
 
-It proves the orchestration contract without depending on true sub-agent spawning.
+It proves the orchestration contract and keeps ORBIT usable when a managed worker runtime is unavailable. It is not the primary managed-worker architecture.
 
 ## Execution
 
@@ -27,6 +27,8 @@ When an order cannot complete:
 - do not fabricate a return,
 - allow Mission Control to decide whether remaining independent orders may continue.
 
-## Upgrade path
+## Adapter-neutral handoff
 
-A multi-agent adapter may later execute independent orders concurrently without changing Crew Order files or reconciliation semantics.
+Use `./bin/orbit runtime sequential prepare <mission> <orbit> <order-file>` to validate and expose the same Crew Order identity before executing the bounded pass through `$orbit-analyze`.
+
+A managed adapter may execute independent orders concurrently without changing Crew Order files, Crew Return attribution, or reconciliation semantics.

@@ -62,14 +62,14 @@ Use IDs such as:
 
 Each order must include:
 
-- exact objective
-- why the role is needed
-- allowed inputs
-- explicitly disallowed work
-- required output
-- dependencies
-- authority boundary
-- completion condition
+- Crew Order ID, Mission ID, and Orbit ID
+- role and `READ_ONLY_SCOUT` order type for Phase 2 runtime work
+- exact objective and why the role is needed
+- allowed sources inside the current source boundary
+- prohibited actions, including implementation/ship work, Dispatch/external writes, Mission State promotion, Gate Control changes, and reconciliation
+- expected return contract
+- dependencies and task status
+- authority boundary and completion condition
 
 Do not silently rewrite an existing Crew Order. Create a revised order when intent materially changes.
 

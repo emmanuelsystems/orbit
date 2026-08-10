@@ -46,7 +46,8 @@ Example:
 
 ## Runtime
 
-- Adapter: `sequential`
+- Adapter: `firstmate`
+- Fallback adapter: `sequential`
 - Maximum parallel workers:
 - Escalation conditions:
 

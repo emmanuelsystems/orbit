@@ -6,10 +6,10 @@ Reconciliation converts independent Crew returns into a reviewable operational r
 
 ## Inputs
 
-Reconciliation may use:
+Reconciliation is an ORBIT responsibility regardless of which runtime executed the orders. It may use:
 
 - Crew Orders
-- Crew Returns
+- role-attributed Crew Returns (including external runtime provenance)
 - the exact Flight Recorder when needed to resolve a claim
 - Mission Charter
 - accepted Mission State
@@ -68,11 +68,11 @@ If two Crew returns, two sources, or two moments in the same Flight Recorder con
 4. use Decision Verifier findings as verification, not authorization,
 5. otherwise mark the item `PENDING` or `OBSERVED` and surface the contradiction.
 
-## Consensus is not authority
+## Runtime completion and consensus are not authority
 
-Three agents agreeing that something should happen does not make it GO.
+A Firstmate task completing, one worker recommending implementation, or three agents agreeing that something should happen does not make it GO and cannot broaden an existing GO scope.
 
-Agent suggestions remain `RECOMMENDATION` and `OBSERVED` or `PENDING` until an authorized human explicitly changes their status.
+Runtime metadata remains provenance. Agent suggestions remain `RECOMMENDATION` and `OBSERVED` or `PENDING` until an authorized human explicitly changes their status through ORBIT Gate Control.
 
 ## Output
 

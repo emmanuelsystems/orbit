@@ -40,16 +40,17 @@ Current scope:
 - local `.txt` or `.md` Flight Recorders
 - Mission Control intake and triage
 - machine-readable Crew Registry
-- bounded Crew Orders
+- bounded READ_ONLY_SCOUT Crew Orders
 - role-attributed Crew Returns
-- sequential runtime adapter
+- Firstmate managed-worker adapter
+- sequential reference/fallback adapter
 - reconciliation artifact and protocol
 - live GO / NO-GO Gate Control
 - Mission Packet artifact model
 - no external writes by default
 - no autonomous decision authority
 
-True parallel sub-agent execution is not required for v0.3 to work. The same Crew Order contract is designed to support native sub-agents or Firstmate later.
+Firstmate may execute dependency-safe scout orders independently while ORBIT retains reconciliation and authority. ORBIT does not depend on Herdr or any other Firstmate backend.
 
 ## Core principles
 
@@ -155,23 +156,15 @@ orbits/YYYY-MM-DD/crew-returns/
 
 ## Runtime adapters
 
-ORBIT owns Mission Control policy and Crew Orders. A runtime only executes those orders.
+ORBIT owns Mission/Orbit identity, source boundaries, Crew semantics, reconciliation, Gate Control, and the Mission Packet. A runtime only executes bounded orders.
 
-The reference v0.3 adapter is:
+`firstmate` is the managed READ_ONLY_SCOUT adapter. It delegates spawning, isolation, task lifecycle, queues, supervision, completion, backends, and recovery to installed Firstmate scripts, then captures completed reports as ORBIT Crew Returns.
 
-```text
-sequential
-```
+`sequential` remains the reference/fallback adapter: one capable agent executes one bounded Crew Order at a time while preserving role separation.
 
-One capable agent executes one bounded Crew Order at a time while preserving role separation.
+Herdr is optional and owned by Firstmate; ORBIT has no Herdr dependency. tmux remains available through Firstmate.
 
-The contract is intentionally compatible with future adapters such as:
-
-- native Codex multi-agent execution
-- Firstmate
-- other local or subscription-backed runtimes
-
-See `runtimes/README.md` and `runtimes/sequential.md`.
+See `runtimes/README.md`, `runtimes/firstmate.md`, and `runtimes/sequential.md`.
 
 ## Reconciliation
 
@@ -247,12 +240,14 @@ Requirements:
 - Bash
 - Git
 - a capable agent harness such as Codex
+- an installed Firstmate home for managed scout execution, or Mission `crew.yaml` configured for the sequential fallback
 
 Clone and verify:
 
 ```sh
 git clone https://github.com/emmanuelsystems/orbit.git
 cd orbit
+./tests/runtime-adapters.sh
 ./tests/smoke.sh
 ./bin/orbit --help
 ```
@@ -298,13 +293,16 @@ Inspect readiness:
 ./bin/orbit analyze weekly-leadership 2026-08-07
 ```
 
-When Crew Orders are ready, invoke:
+The analyze output identifies the configured runtime. For Firstmate, explicitly prepare, inspect, submit, and collect each scout order:
 
-```text
-$orbit-analyze
+```sh
+./bin/orbit runtime firstmate prepare weekly-leadership 2026-08-07 001-recorder-analyst.md
+./bin/orbit runtime firstmate submit  weekly-leadership 2026-08-07 001-recorder-analyst.md
+# After Firstmate completion:
+./bin/orbit runtime firstmate collect weekly-leadership 2026-08-07 001-recorder-analyst.md
 ```
 
-The sequential runtime executes the orders, writes Crew Returns, reconciles them, and prepares the Mission Packet.
+Then invoke `$orbit-analyze` for ORBIT-owned reconciliation, Gate Control, and Mission Packet preparation. Missions configured for `sequential` continue to execute bounded fallback passes through `$orbit-analyze`.
 
 For a live human decision:
 
@@ -393,15 +391,15 @@ By default:
 - dynamic Crew selection through Mission Control triage
 - bounded Crew Orders
 - role-attributed Crew Returns
-- sequential runtime adapter
-- explicit reconciliation
+- Firstmate READ_ONLY_SCOUT runtime adapter
+- sequential reference/fallback adapter
+- explicit ORBIT-owned reconciliation
 - runtime-independent orchestration contract
 
 ### Next runtime milestone
 
-- native sub-agent spawning
-- parallel execution for dependency-safe Crew Orders
-- Firstmate adapter
+- additional native sub-agent adapters
+- broader dependency-safe scheduling policies
 - model-tier routing
 - subscription-aware cost routing
 - escalation rules

@@ -17,3 +17,5 @@ The original prototype explored:
 - durable next-Orbit Mission State
 
 Use `config.yaml` as an example of how a real team can specialize ORBIT.
+
+The tracked Firstmate acceptance fixture under `tests/fixtures/firstmate/` uses this Mission slug and reference date but contains only synthetic structural findings. It does not contain or reproduce the July 31 Flight Recorder or any private Mission artifact.

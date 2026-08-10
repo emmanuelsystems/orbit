@@ -1,0 +1,439 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ORBIT_HOME="${ORBIT_HOME:-$HOME/.orbit}"
+
+usage() {
+  cat <<'USAGE'
+ORBIT Crew Runtime Adapter
+
+Usage:
+  ./bin/orbit runtime firstmate prepare <mission-slug> <orbit-id> <order-file> [firstmate-task-id]
+  ./bin/orbit runtime firstmate submit  <mission-slug> <orbit-id> <order-file> [firstmate-task-id]
+  ./bin/orbit runtime firstmate collect <mission-slug> <orbit-id> <order-file> [firstmate-task-id]
+  ./bin/orbit runtime sequential prepare <mission-slug> <orbit-id> <order-file>
+
+The adapter accepts only READ_ONLY_SCOUT Firstmate orders. `prepare` creates an
+inspectable Firstmate scout brief, `submit` delegates spawning to Firstmate, and
+`collect` captures a completed scout report as an ORBIT Crew Return. It never
+runs implementation or Dispatch, changes Gate Control, reconciles findings, or
+promotes Mission State.
+
+Configuration:
+  ORBIT_FIRSTMATE_ROOT     Firstmate distro containing fm-brief, fm-spawn, and fm-crew-state scripts
+                           (default: ~/code/firstmate)
+  ORBIT_FIRSTMATE_HOME     Firstmate operational home (default: ORBIT_FIRSTMATE_ROOT)
+  ORBIT_FIRSTMATE_PROJECT  project checkout Firstmate uses for scout worktrees
+                           (default: this ORBIT checkout)
+  ORBIT_FIRSTMATE_BACKEND  optional backend passed unchanged to Firstmate
+USAGE
+}
+
+trim_backticks() {
+  local value=$1
+  case "$value" in
+    \`*\`) value=${value#\`}; value=${value%\`} ;;
+  esac
+  printf '%s\n' "$value"
+}
+
+order_field() {
+  local label value
+  for label in "$@"; do
+    value=$(awk -v prefix="- $label:" '
+      index($0, prefix) == 1 {
+        value = substr($0, length(prefix) + 1)
+        sub(/^[[:space:]]+/, "", value)
+        print value
+        exit
+      }
+    ' "$ORDER_PATH")
+    if [ -n "$value" ]; then
+      trim_backticks "$value"
+      return 0
+    fi
+  done
+  return 1
+}
+
+order_section() {
+  local heading value
+  for heading in "$@"; do
+    value=$(awk -v wanted="## $heading" '
+      $0 == wanted { found = 1; next }
+      found && /^## / { exit }
+      found { lines[++count] = $0 }
+      END {
+        first = 1
+        while (first <= count && lines[first] ~ /^[[:space:]]*$/) first++
+        last = count
+        while (last >= first && lines[last] ~ /^[[:space:]]*$/) last--
+        for (i = first; i <= last; i++) print lines[i]
+      }
+    ' "$ORDER_PATH")
+    if printf '%s\n' "$value" | grep -q '[^[:space:]]'; then
+      printf '%s\n' "$value"
+      return 0
+    fi
+  done
+  return 1
+}
+
+safe_task_id() {
+  local task_id=$1
+  [ -n "$task_id" ] || return 1
+  [ "${#task_id}" -le 64 ] || return 1
+  case "$task_id" in
+    .*|*[!A-Za-z0-9._-]*) return 1 ;;
+  esac
+}
+
+slugify_task_id() {
+  printf '%s' "$1" \
+    | tr '[:upper:]' '[:lower:]' \
+    | sed 's/[^a-z0-9._-]/-/g; s/--*/-/g; s/^-//; s/-$//'
+}
+
+resolve_context() {
+  MISSION_PATH="$ORBIT_HOME/missions/$MISSION_SLUG"
+  ORBIT_PATH="$MISSION_PATH/orbits/$ORBIT_ID"
+  ORDERS_PATH="$ORBIT_PATH/crew-orders"
+  RETURNS_PATH="$ORBIT_PATH/crew-returns"
+
+  [ -d "$MISSION_PATH" ] || { echo "error: unknown Mission: $MISSION_SLUG" >&2; exit 1; }
+  [ -d "$ORBIT_PATH" ] || { echo "error: unknown Orbit: $ORBIT_ID" >&2; exit 1; }
+  [ -d "$ORDERS_PATH" ] || { echo "error: missing Crew Orders directory: $ORDERS_PATH" >&2; exit 1; }
+
+  case "$ORDER_ARG" in
+    /*) ORDER_PATH=$ORDER_ARG ;;
+    *) ORDER_PATH="$ORDERS_PATH/$ORDER_ARG" ;;
+  esac
+  [ -f "$ORDER_PATH" ] || { echo "error: Crew Order not found: $ORDER_PATH" >&2; exit 1; }
+  [ ! -L "$ORDER_PATH" ] || { echo "error: Crew Order may not be a symbolic link: $ORDER_PATH" >&2; exit 1; }
+  ORDER_PATH="$(cd "$(dirname "$ORDER_PATH")" && pwd -P)/$(basename "$ORDER_PATH")"
+  ORDERS_PATH="$(cd "$ORDERS_PATH" && pwd -P)"
+  case "$ORDER_PATH" in
+    "$ORDERS_PATH"/*) ;;
+    *) echo "error: Crew Order must be inside $ORDERS_PATH" >&2; exit 1 ;;
+  esac
+
+  ORDER_ID=$(order_field "Crew Order ID" "Order ID" || true)
+  ORDER_MISSION_ID=$(order_field "Mission ID" "Mission" || true)
+  ORDER_ORBIT_ID=$(order_field "Orbit ID" "Orbit date" || true)
+  ROLE=$(order_field "Role" || true)
+  ORDER_STATUS=$(order_field "Task status" "Status" || true)
+  ORDER_TYPE=$(order_field "Order type" "Work type" || true)
+  OBJECTIVE=$(order_section "Objective" || true)
+  ALLOWED_SOURCES=$(order_section "Allowed sources" "Allowed inputs" || true)
+  PROHIBITED_ACTIONS=$(order_section "Prohibited actions" "Explicitly disallowed" || true)
+  DEPENDENCIES=$(order_section "Dependencies" || true)
+  EXPECTED_RETURN=$(order_section "Expected return contract" "Required output" || true)
+
+  [ -n "$ORDER_ID" ] || { echo "error: Crew Order is missing Crew Order ID" >&2; exit 1; }
+  [ -n "$ORDER_MISSION_ID" ] || { echo "error: Crew Order is missing Mission ID" >&2; exit 1; }
+  [ -n "$ORDER_ORBIT_ID" ] || { echo "error: Crew Order is missing Orbit ID" >&2; exit 1; }
+  [ -n "$ROLE" ] || { echo "error: Crew Order is missing role" >&2; exit 1; }
+  [ "$ORDER_MISSION_ID" = "$MISSION_SLUG" ] || {
+    echo "error: Crew Order Mission ID '$ORDER_MISSION_ID' does not match '$MISSION_SLUG'" >&2
+    exit 1
+  }
+  [ "$ORDER_ORBIT_ID" = "$ORBIT_ID" ] || {
+    echo "error: Crew Order Orbit ID '$ORDER_ORBIT_ID' does not match '$ORBIT_ID'" >&2
+    exit 1
+  }
+  case "$(basename "$ORDER_PATH")" in
+    "$ORDER_ID"|"$ORDER_ID"-*|"$ORDER_ID.md"|"$ORDER_ID"-*.md) ;;
+    *) echo "error: Crew Order filename does not preserve Order ID '$ORDER_ID'" >&2; exit 1 ;;
+  esac
+
+  ORDER_BASENAME=$(basename "$ORDER_PATH")
+  RETURN_PATH="$RETURNS_PATH/$ORDER_BASENAME"
+}
+
+validate_firstmate_scout_order() {
+  local normalized_type normalized_role
+  normalized_type=$(printf '%s' "$ORDER_TYPE" | tr '[:lower:]-/' '[:upper:]__' | tr -d '[:space:]')
+  [ "$normalized_type" = "READ_ONLY_SCOUT" ] || {
+    echo "error: Firstmate adapter accepts only Order type READ_ONLY_SCOUT" >&2
+    exit 1
+  }
+  [ -n "$ORDER_STATUS" ] || { echo "error: Firstmate scout order is missing Task status" >&2; exit 1; }
+  [ -n "$OBJECTIVE" ] || { echo "error: Firstmate scout order is missing Objective" >&2; exit 1; }
+  [ -n "$ALLOWED_SOURCES" ] || { echo "error: Firstmate scout order is missing Allowed sources" >&2; exit 1; }
+  [ -n "$PROHIBITED_ACTIONS" ] || { echo "error: Firstmate scout order is missing Prohibited actions" >&2; exit 1; }
+  [ -n "$DEPENDENCIES" ] || { echo "error: Firstmate scout order is missing Dependencies (use None when independent)" >&2; exit 1; }
+  [ -n "$EXPECTED_RETURN" ] || { echo "error: Firstmate scout order is missing Expected return contract" >&2; exit 1; }
+
+  printf '%s\n' "$PROHIBITED_ACTIONS" | grep -Eqi 'modif.*project|project files.*modif|scratch commit' || {
+    echo "error: Prohibited actions must explicitly keep project files read-only" >&2
+    exit 1
+  }
+  printf '%s\n' "$PROHIBITED_ACTIONS" | grep -Eqi 'implement|ship' || {
+    echo "error: Prohibited actions must explicitly forbid implementation/ship work" >&2
+    exit 1
+  }
+  printf '%s\n' "$PROHIBITED_ACTIONS" | grep -Eqi 'dispatch|external write' || {
+    echo "error: Prohibited actions must explicitly forbid Dispatch/external writes" >&2
+    exit 1
+  }
+  printf '%s\n' "$PROHIBITED_ACTIONS" | grep -Eqi 'mission state.*promot|promot.*mission state' || {
+    echo "error: Prohibited actions must explicitly forbid Mission State promotion" >&2
+    exit 1
+  }
+
+  normalized_role=$(printf '%s' "$ROLE" | tr '[:upper:] -' '[:lower:]__')
+  case "$normalized_role" in
+    flight_planner|dispatch_agent)
+      echo "error: Firstmate scout adapter does not execute post-GO, implementation, or Dispatch roles" >&2
+      exit 1
+      ;;
+  esac
+}
+
+resolve_firstmate() {
+  FIRSTMATE_ROOT="${ORBIT_FIRSTMATE_ROOT:-$HOME/code/firstmate}"
+  FIRSTMATE_HOME="${ORBIT_FIRSTMATE_HOME:-$FIRSTMATE_ROOT}"
+  FIRSTMATE_PROJECT="${ORBIT_FIRSTMATE_PROJECT:-$ROOT}"
+  BRIEF_SCRIPT="$FIRSTMATE_ROOT/bin/fm-brief.sh"
+  SPAWN_SCRIPT="$FIRSTMATE_ROOT/bin/fm-spawn.sh"
+  CREW_STATE_SCRIPT="$FIRSTMATE_ROOT/bin/fm-crew-state.sh"
+  [ -x "$BRIEF_SCRIPT" ] || { echo "error: Firstmate brief script not executable: $BRIEF_SCRIPT" >&2; exit 1; }
+  [ -x "$SPAWN_SCRIPT" ] || { echo "error: Firstmate spawn script not executable: $SPAWN_SCRIPT" >&2; exit 1; }
+  [ -x "$CREW_STATE_SCRIPT" ] || { echo "error: Firstmate task-state script not executable: $CREW_STATE_SCRIPT" >&2; exit 1; }
+  [ -d "$FIRSTMATE_PROJECT" ] || { echo "error: Firstmate project is not a directory: $FIRSTMATE_PROJECT" >&2; exit 1; }
+
+  if [ -n "$TASK_ID_OVERRIDE" ]; then
+    FIRSTMATE_TASK_ID=$TASK_ID_OVERRIDE
+  else
+    FIRSTMATE_TASK_ID=$(slugify_task_id "orb-$ORDER_MISSION_ID-${ORDER_ORBIT_ID//-/}-$ORDER_ID")
+  fi
+  safe_task_id "$FIRSTMATE_TASK_ID" || {
+    echo "error: derived Firstmate task ID is unsafe or exceeds 64 characters; provide an explicit task ID" >&2
+    exit 1
+  }
+  FIRSTMATE_BRIEF_PATH="$FIRSTMATE_HOME/data/$FIRSTMATE_TASK_ID/brief.md"
+  FIRSTMATE_REPORT_PATH="$FIRSTMATE_HOME/data/$FIRSTMATE_TASK_ID/report.md"
+  FIRSTMATE_META_PATH="$FIRSTMATE_HOME/state/$FIRSTMATE_TASK_ID.meta"
+}
+
+print_mapping() {
+  local task_status=$1
+  printf 'ORBIT RUNTIME TASK\n'
+  printf 'Crew Order ID: %s\nMission ID: %s\nOrbit ID: %s\nRole: %s\nRuntime: %s\nTask status: %s\n' \
+    "$ORDER_ID" "$ORDER_MISSION_ID" "$ORDER_ORBIT_ID" "$ROLE" "$ADAPTER" "$task_status"
+  if [ "$ADAPTER" = firstmate ]; then
+    printf 'Firstmate task ID: %s\nFirstmate report path: %s\n' "$FIRSTMATE_TASK_ID" "$FIRSTMATE_REPORT_PATH"
+  else
+    printf 'Runtime task ID: NOT_APPLICABLE\nRuntime report path: %s\n' "$RETURN_PATH"
+  fi
+  printf 'Crew Order source: %s\n' "$ORDER_PATH"
+}
+
+render_runtime_envelope() {
+  cat <<EOF
+Execute this ORBIT Crew Order as a READ-ONLY/SCOUT task. The ORBIT order is the immutable intent record; Firstmate execution metadata is provenance only.
+
+## ORBIT identity and runtime mapping
+
+- Crew Order ID: $ORDER_ID
+- Mission ID: $ORDER_MISSION_ID
+- Orbit ID: $ORDER_ORBIT_ID
+- Role: $ROLE
+- Order type: $ORDER_TYPE
+- ORBIT order status: ${ORDER_STATUS:-NOT_REPORTED}
+- Runtime: firstmate
+- Task status at handoff: PREPARED
+- Firstmate task ID: $FIRSTMATE_TASK_ID
+- Firstmate report path: $FIRSTMATE_REPORT_PATH
+- Crew Order source: $ORDER_PATH
+
+## Objective
+
+$OBJECTIVE
+
+## Allowed sources
+
+$ALLOWED_SOURCES
+
+Do not read or substitute sources outside this list. If a required source is unavailable, report MISSING_EVIDENCE and stop only the source-dependent conclusions.
+
+## Prohibited actions
+
+$PROHIBITED_ACTIONS
+
+## Dependencies
+
+${DEPENDENCIES:-None.}
+
+## Expected ORBIT Crew Return contract
+
+$EXPECTED_RETURN
+
+## Authority and completion boundary
+
+Return role-attributed findings to the Firstmate scout report path. Findings and recommendations do not create or broaden GO, authorize implementation, authorize Dispatch, reconcile Crew Returns, or promote Mission State. Do not edit ORBIT Gate Control, reconciliation, Dispatch, or Mission State artifacts. Mission Control performs reconciliation and Gate Control after ORBIT captures the report.
+EOF
+}
+
+prepare_firstmate() {
+  local envelope brief_tmp line replaced=0
+  [ ! -e "$FIRSTMATE_BRIEF_PATH" ] || {
+    echo "error: Firstmate brief already exists for task $FIRSTMATE_TASK_ID" >&2
+    exit 1
+  }
+  FM_HOME="$FIRSTMATE_HOME" "$BRIEF_SCRIPT" "$FIRSTMATE_TASK_ID" "$(basename "$FIRSTMATE_PROJECT")" --scout >/dev/null
+  [ -f "$FIRSTMATE_BRIEF_PATH" ] || { echo "error: Firstmate did not create expected brief: $FIRSTMATE_BRIEF_PATH" >&2; exit 1; }
+
+  envelope="$FIRSTMATE_BRIEF_PATH.orbit-envelope.$$"
+  brief_tmp="$FIRSTMATE_BRIEF_PATH.orbit-tmp.$$"
+  render_runtime_envelope > "$envelope"
+  while IFS= read -r line || [ -n "$line" ]; do
+    if [ "$line" = "{TASK}" ]; then
+      cat "$envelope" >> "$brief_tmp"
+      replaced=1
+    else
+      printf '%s\n' "$line" >> "$brief_tmp"
+    fi
+  done < "$FIRSTMATE_BRIEF_PATH"
+  rm -f "$envelope"
+  [ "$replaced" -eq 1 ] || { rm -f "$brief_tmp"; echo "error: Firstmate scout scaffold did not contain {TASK}" >&2; exit 1; }
+  cat >> "$brief_tmp" <<'EOF'
+
+# ORBIT Phase 2 hard stop
+
+This READ_ONLY_SCOUT order is read-only despite any generic scout-laboratory wording above: do not edit project files or make scratch commits. Write only the Firstmate report and status required by the scout contract. This task is not eligible for promotion to a Firstmate ship task. If the report recommends implementation, return that recommendation to ORBIT as an unauthorized finding. A separate ORBIT order and explicit scoped human GO would be required by a later phase; this adapter provides no implementation or promotion command.
+EOF
+  mv "$brief_tmp" "$FIRSTMATE_BRIEF_PATH"
+
+  print_mapping PREPARED
+  printf 'Firstmate brief path: %s\nNext: inspect the brief, then run the matching `runtime firstmate submit` command.\n' "$FIRSTMATE_BRIEF_PATH"
+}
+
+submit_firstmate() {
+  local -a spawn_args
+  [ -f "$FIRSTMATE_BRIEF_PATH" ] || {
+    echo "error: missing prepared Firstmate brief; run `runtime firstmate prepare` first" >&2
+    exit 1
+  }
+  grep -F -- "- Crew Order ID: $ORDER_ID" "$FIRSTMATE_BRIEF_PATH" >/dev/null || {
+    echo "error: prepared Firstmate brief does not match Crew Order ID $ORDER_ID" >&2
+    exit 1
+  }
+  grep -F -- "- Mission ID: $ORDER_MISSION_ID" "$FIRSTMATE_BRIEF_PATH" >/dev/null || {
+    echo "error: prepared Firstmate brief does not match Mission ID $ORDER_MISSION_ID" >&2
+    exit 1
+  }
+  grep -F -- "- Orbit ID: $ORDER_ORBIT_ID" "$FIRSTMATE_BRIEF_PATH" >/dev/null || {
+    echo "error: prepared Firstmate brief does not match Orbit ID $ORDER_ORBIT_ID" >&2
+    exit 1
+  }
+
+  spawn_args=("$FIRSTMATE_TASK_ID" "$FIRSTMATE_PROJECT" --scout)
+  if [ -n "${ORBIT_FIRSTMATE_BACKEND:-}" ]; then
+    spawn_args+=(--backend "$ORBIT_FIRSTMATE_BACKEND")
+  fi
+  FM_HOME="$FIRSTMATE_HOME" "$SPAWN_SCRIPT" "${spawn_args[@]}"
+  print_mapping SUBMITTED
+  echo 'Firstmate owns supervision, completion handling, queues, backend lifecycle, and recovery for this task.'
+}
+
+meta_field() {
+  local key=$1
+  [ -f "$FIRSTMATE_META_PATH" ] || return 1
+  awk -F= -v wanted="$key" '$1 == wanted { sub(/^[^=]*=/, ""); print; exit }' "$FIRSTMATE_META_PATH"
+}
+
+collect_firstmate() {
+  local firstmate_state started_at completed_at return_tmp
+  [ -f "$FIRSTMATE_REPORT_PATH" ] || { echo "error: Firstmate report not found: $FIRSTMATE_REPORT_PATH" >&2; exit 1; }
+  [ ! -L "$FIRSTMATE_REPORT_PATH" ] || { echo "error: Firstmate report may not be a symbolic link: $FIRSTMATE_REPORT_PATH" >&2; exit 1; }
+  firstmate_state=$(FM_HOME="$FIRSTMATE_HOME" "$CREW_STATE_SCRIPT" "$FIRSTMATE_TASK_ID")
+  case "$firstmate_state" in
+    state:\ done\ *) ;;
+    *) echo "error: Firstmate task is not complete ($firstmate_state)" >&2; exit 1 ;;
+  esac
+
+  started_at=$(meta_field started_at || meta_field started || true)
+  completed_at=$(meta_field completed_at || meta_field completed || true)
+  [ -n "$started_at" ] || started_at=NOT_REPORTED
+  [ -n "$completed_at" ] || completed_at=NOT_REPORTED
+
+  mkdir -p "$RETURNS_PATH"
+  [ ! -e "$RETURN_PATH" ] || { echo "error: Crew Return already exists: $RETURN_PATH" >&2; exit 1; }
+  umask 077
+  return_tmp="$RETURN_PATH.tmp.$$"
+  awk \
+    -v order_id="$ORDER_ID" \
+    -v mission_id="$ORDER_MISSION_ID" \
+    -v orbit_id="$ORDER_ORBIT_ID" \
+    -v role="$ROLE" \
+    -v order_status="${ORDER_STATUS:-NOT_REPORTED}" \
+    -v task_id="$FIRSTMATE_TASK_ID" \
+    -v report_path="$FIRSTMATE_REPORT_PATH" \
+    -v started_at="$started_at" \
+    -v completed_at="$completed_at" '
+      $0 == "- Original Crew Order ID:" { print $0 " " order_id; next }
+      $0 == "- Mission ID:" { print $0 " " mission_id; next }
+      $0 == "- Orbit ID:" { print $0 " " orbit_id; next }
+      $0 == "- Role:" { print $0 " " role; next }
+      $0 == "- Runtime:" { print $0 " `firstmate`"; next }
+      $0 == "- ORBIT order status:" { print $0 " `" order_status "`"; next }
+      $0 == "- Runtime task status:" { print $0 " `done`"; next }
+      $0 == "- Completion state:" { print $0 " `COMPLETED`"; next }
+      $0 == "- Firstmate task ID:" { print $0 " " task_id; next }
+      $0 == "- Runtime report path / source:" { print $0 " " report_path; next }
+      $0 == "- Execution started at:" { print $0 " " started_at; next }
+      $0 == "- Execution completed at:" { print $0 " " completed_at; next }
+      { print }
+    ' "$ROOT/templates/crew-return.md" > "$return_tmp"
+  {
+    printf '\n> The following block is the role-attributed Firstmate scout report. It is evidence/findings, not authority.\n>\n'
+    sed 's/^/> /' "$FIRSTMATE_REPORT_PATH"
+    printf '\n'
+  } >> "$return_tmp"
+  mv "$return_tmp" "$RETURN_PATH"
+
+  print_mapping COMPLETED
+  printf 'Crew Return: %s\n' "$RETURN_PATH"
+  echo 'Gate Control and reconciliation were not changed. Mission Control must reconcile this return inside ORBIT.'
+}
+
+ADAPTER=${1:-}
+ACTION=${2:-}
+case "$ADAPTER" in
+  help|-h|--help|'') usage; exit 0 ;;
+esac
+MISSION_SLUG=${3:-}
+ORBIT_ID=${4:-}
+ORDER_ARG=${5:-}
+TASK_ID_OVERRIDE=${6:-}
+[ -n "$MISSION_SLUG" ] && [ -n "$ORBIT_ID" ] && [ -n "$ORDER_ARG" ] || { usage >&2; exit 2; }
+[ "$#" -le 6 ] || { usage >&2; exit 2; }
+
+resolve_context
+
+case "$ADAPTER:$ACTION" in
+  firstmate:prepare|firstmate:submit|firstmate:collect)
+    validate_firstmate_scout_order
+    resolve_firstmate
+    case "$ACTION" in
+      prepare) prepare_firstmate ;;
+      submit) submit_firstmate ;;
+      collect) collect_firstmate ;;
+    esac
+    ;;
+  sequential:prepare)
+    print_mapping READY_FOR_SEQUENTIAL_EXECUTION
+    echo 'Next: execute this bounded order through $orbit-analyze and write its role-attributed return before ORBIT reconciliation.'
+    ;;
+  sequential:submit|sequential:collect)
+    echo 'error: sequential execution and return writing occur inside $orbit-analyze; use `runtime sequential prepare` to inspect the handoff' >&2
+    exit 2
+    ;;
+  *)
+    echo "error: unsupported runtime action: $ADAPTER $ACTION" >&2
+    usage >&2
+    exit 2
+    ;;
+esac

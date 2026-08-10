@@ -21,7 +21,8 @@ mission:
   cadence: weekly
 
 mission_control:
-  execution_mode: sequential
+  execution_mode: firstmate
+  fallback_execution_mode: sequential
   crew_manifest: crew.yaml
 
 permissions:
