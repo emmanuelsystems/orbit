@@ -42,13 +42,13 @@ The Mission `crew.yaml` defines available roles and runtime policy.
 
 ## 7. Orchestrate
 
-Execute selected Crew roles using the available runtime.
+Issue bounded Crew Orders and execute selected roles through the configured runtime.
 
-The v0.2 default remains sequential execution with one capable agent. Multi-agent runtimes may execute independent roles concurrently as long as they obey the same role contracts.
+Firstmate is the managed READ_ONLY_SCOUT adapter; sequential execution remains the reference/fallback. Both preserve the same order semantics and role-attributed Crew Returns. A runtime may execute dependency-safe orders concurrently, but it cannot broaden sources, reconcile returns, or create authority.
 
 Standard huddle roles are Recorder Analyst, Systems Analyst, and Decision Verifier.
 
-Write role-attributed results to `crew-findings.md`.
+Store one role-attributed result per order under `crew-returns/`, then summarize those returns in `crew-findings.md` only during ORBIT reconciliation.
 
 ## 8. Reconcile and Gate
 

@@ -80,15 +80,15 @@ Do not add a Crew member unless independent work materially improves the Orbit.
 
 ## 4. Orchestrate
 
-Execute the plan using the available runtime.
+Issue bounded Crew Orders and execute them through the configured adapter.
 
-ORBIT v0.2 must remain functional in sequential mode with one capable agent. A multi-agent runtime may execute independent Crew roles concurrently, but the role contracts and outputs must remain the same.
+Firstmate is the managed READ_ONLY_SCOUT adapter. It owns spawning, isolated execution, task lifecycle, queues, supervision, completion handling, backends, and recovery. ORBIT captures completed reports as role-attributed Crew Returns. Sequential execution remains the reference/fallback adapter.
 
-Mission Control may delegate analysis. It may not delegate human authority.
+Every adapter preserves the same Crew Order semantics, dependencies, source boundaries, prohibited actions, and return attribution. Mission Control may delegate analysis. It may not delegate reconciliation, Gate Control, or human authority.
 
 ## 5. Reconcile
 
-Combine Crew findings without flattening disagreement.
+Reconciliation remains inside ORBIT. Combine Crew Returns without flattening disagreement.
 
 When findings conflict:
 

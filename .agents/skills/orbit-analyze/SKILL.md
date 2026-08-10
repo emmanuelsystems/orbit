@@ -24,13 +24,14 @@ user-invocable: true
 8. `protocols/mission-packet.md`
 9. `crews/registry.yaml`
 10. `runtimes/README.md`
-11. active Mission `charter.md`
-12. active Mission `crew.yaml`
-13. active Mission `state/current.md`
-14. active Orbit `source-index.md`
-15. active Orbit `gate-log.md`
-16. active Orbit `mission-control-plan.md`
-17. active Orbit `crew-orders/`
+11. configured adapter doc: `runtimes/firstmate.md` or `runtimes/sequential.md`
+12. active Mission `charter.md`
+13. active Mission `crew.yaml`
+14. active Mission `state/current.md`
+15. active Orbit `source-index.md`
+16. active Orbit `gate-log.md`
+17. active Orbit `mission-control-plan.md`
+18. active Orbit `crew-orders/`
 
 ## Safety gate
 
@@ -46,23 +47,25 @@ If `crew-orders/` contains no active orders, stop and invoke or recommend `$orbi
 
 Use the Mission `crew.yaml` execution mode.
 
-For v0.3, `sequential` is the reference adapter. Read `runtimes/sequential.md`.
+### Firstmate
 
-A compatible multi-agent adapter may execute independent orders separately, but it must preserve the same order and return contracts.
+Read `runtimes/firstmate.md`. Phase 2 accepts only `READ_ONLY_SCOUT` orders. Use `./bin/orbit runtime firstmate prepare`, inspect the generated scout brief, then `submit`. Firstmate owns worker spawning, isolation, task lifecycle, queues, supervision, completion, backends, and recovery.
 
-## Execute Crew Orders
+After Firstmate records completion, use `collect` to capture each report as the matching role-attributed ORBIT Crew Return. Do not reconcile while required orders remain in flight. Firstmate completion, findings, recommendations, and consensus do not create or broaden GO.
 
-For each active Crew Order:
+### Sequential fallback
+
+Read `runtimes/sequential.md`. For each active Crew Order:
 
 1. adopt only the named role,
-2. read only allowed inputs plus governing ORBIT safety protocols,
+2. read only allowed sources plus governing ORBIT safety protocols,
 3. respect dependencies,
 4. perform the bounded objective,
 5. write one role-attributed return under `crew-returns/`,
 6. preserve unresolved evidence and uncertainty,
 7. never create human authority.
 
-Use matching filenames such as:
+Both adapters use matching filenames such as:
 
 ```text
 crew-orders/001-recorder-analyst.md
@@ -71,9 +74,9 @@ crew-returns/001-recorder-analyst.md
 
 A later role may read an earlier return only when its Crew Order explicitly allows or requires that dependency.
 
-## Reconcile
+## Reconcile inside ORBIT
 
-After all required Crew Orders complete or are explicitly blocked:
+The runtime never owns reconciliation. After all required Crew Orders complete or are explicitly blocked:
 
 1. read all role returns,
 2. populate `crew-findings.md`,

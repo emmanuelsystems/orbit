@@ -15,11 +15,24 @@ if ! grep -q 'PINNED_' "$orbit/source-index.md"; then echo 'error: no pinned Fli
 bash "$ROOT/bin/orbit-plan" "$slug" "$date" >/dev/null
 orders="$(find "$orbit/crew-orders" -maxdepth 1 -type f -name '*.md' 2>/dev/null | wc -l | tr -d ' ')"
 returns="$(find "$orbit/crew-returns" -maxdepth 1 -type f -name '*.md' 2>/dev/null | wc -l | tr -d ' ')"
-printf 'ORBIT // CREW ORCHESTRATION\nMission: %s\nOrbit: %s\nCrew Manifest: %s\nCrew Registry: %s\nCrew Orders: %s (%s files)\nCrew Returns: %s (%s files)\nReconciliation: %s\nActive context: %s\n' "$slug" "$date" "$mission/crew.yaml" "$ROOT/crews/registry.yaml" "$orbit/crew-orders" "$orders" "$orbit/crew-returns" "$returns" "$orbit/reconciliation.md" "$ORBIT_HOME/active-orbit.md"
+runtime="$(awk '
+  /^execution:/ { in_execution=1; next }
+  in_execution && /^[^[:space:]]/ { in_execution=0 }
+  in_execution && /^[[:space:]]+mode:/ { sub(/^[[:space:]]+mode:[[:space:]]*/, ""); print; exit }
+' "$mission/crew.yaml")"
+[ -n "$runtime" ] || runtime=sequential
+printf 'ORBIT // CREW ORCHESTRATION\nMission: %s\nOrbit: %s\nCrew Manifest: %s\nCrew Registry: %s\nRuntime: %s\nCrew Orders: %s (%s files)\nCrew Returns: %s (%s files)\nReconciliation: %s\nActive context: %s\n' "$slug" "$date" "$mission/crew.yaml" "$ROOT/crews/registry.yaml" "$runtime" "$orbit/crew-orders" "$orders" "$orbit/crew-returns" "$returns" "$orbit/reconciliation.md" "$ORBIT_HOME/active-orbit.md"
 if [ "$orders" -eq 0 ]; then
   echo 'FLIGHT STATUS: WAITING FOR CREW PLAN'
   echo 'Next: invoke $orbit-plan in your agent.'
+elif [ "$runtime" = firstmate ]; then
+  echo 'FLIGHT STATUS: CREW ORDERS READY FOR FIRSTMATE'
+  echo 'Next: use `orbit runtime firstmate prepare`, inspect the scout brief, then submit and collect each completed report.'
+  echo 'After returns are captured, invoke $orbit-analyze for ORBIT-owned reconciliation and Gate Control.'
+elif [ "$runtime" = sequential ]; then
+  echo 'FLIGHT STATUS: CREW ORDERS READY FOR SEQUENTIAL FALLBACK'
+  echo 'Next: invoke $orbit-analyze in your agent to execute bounded sequential passes and reconcile returns.'
 else
-  echo 'FLIGHT STATUS: CREW ORDERS READY'
-  echo 'Next: invoke $orbit-analyze in your agent to execute Crew Orders and reconcile returns.'
+  echo 'FLIGHT STATUS: CREW ORDERS READY FOR CONFIGURED RUNTIME'
+  echo 'Next: use a compatible runtime adapter that preserves Crew Order and Crew Return semantics, then reconcile inside ORBIT.'
 fi

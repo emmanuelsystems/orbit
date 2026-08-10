@@ -13,6 +13,7 @@ ORBIT is currently an alpha agent distro for recurring meetings.
 ## Development check
 
 ```sh
+./tests/runtime-adapters.sh
 ./tests/smoke.sh
 ```
 

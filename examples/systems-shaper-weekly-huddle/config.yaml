@@ -19,6 +19,9 @@ telemetry:
   reference_orbit:
     meeting_date: 2026-07-31
 
+mission_control:
+  crew_manifest: crew.yaml
+
 permissions:
   mission_control_can:
     - analyze_sources

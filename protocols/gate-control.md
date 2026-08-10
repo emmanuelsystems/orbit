@@ -69,6 +69,7 @@ The newest valid authority event controls active status within its scope.
 
 ## Safety
 
+- Runtime completion metadata, worker findings, recommendations, and worker consensus are provenance, not authority events.
 - Never infer a live GO from enthusiasm or vague agreement.
 - Never broaden a human's authority beyond the Mission Charter.
 - Never convert a GO into external Dispatch unless the Dispatch scope and permission gate both allow it.

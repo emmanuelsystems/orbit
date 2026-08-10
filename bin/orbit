@@ -11,6 +11,7 @@ case "$cmd" in
   ingest) exec "$ROOT/bin/orbit-ingest" "$@" ;;
   plan) exec bash "$ROOT/bin/orbit-plan" "$@" ;;
   analyze) exec "$ROOT/bin/orbit-analyze" "$@" ;;
+  runtime) exec bash "$ROOT/bin/orbit-runtime" "$@" ;;
   gate) exec bash "$ROOT/bin/orbit-gate" "$@" ;;
   status) exec "$ROOT/bin/orbit-status" "$@" ;;
   close) exec "$ROOT/bin/orbit-close" "$@" ;;
@@ -26,6 +27,7 @@ Usage:
   ./bin/orbit ingest <mission-slug> <transcript-path> [YYYY-MM-DD]
   ./bin/orbit plan <mission-slug> [YYYY-MM-DD]
   ./bin/orbit analyze <mission-slug> [YYYY-MM-DD]
+  ./bin/orbit runtime <adapter> <action> <mission-slug> <orbit-id> <order-file> [runtime-task-id]
   ./bin/orbit gate <mission-slug> [YYYY-MM-DD]
   ./bin/orbit status <mission-slug>
   ./bin/orbit close <mission-slug> [YYYY-MM-DD]

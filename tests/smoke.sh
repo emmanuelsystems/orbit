@@ -18,6 +18,12 @@ printf 'Speaker A: We agreed to test the workflow next week.\n' > "$transcript"
 mission="$ORBIT_HOME/missions/test-mission"
 orbit="$mission/orbits/2026-08-07"
 [ -f "$mission/crew.yaml" ]
+grep -F 'mode: firstmate' "$mission/crew.yaml" >/dev/null
+grep -F 'fallback: sequential' "$mission/crew.yaml" >/dev/null
+if grep -Eq 'execution_mode|fallback_execution_mode|(^|[[:space:]])runtime:' "$mission/config.yaml"; then
+  echo 'FAIL: generated Mission config duplicates crew.yaml runtime policy' >&2
+  exit 1
+fi
 [ -f "$ORBIT_HOME/active-orbit.md" ]
 [ -f "$orbit/source-index.md" ]
 [ -f "$orbit/briefing.md" ]

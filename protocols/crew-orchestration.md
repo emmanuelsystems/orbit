@@ -53,14 +53,15 @@ Crew Orders are immutable intent records for that execution attempt. If the obje
 
 Every order includes:
 
-- order ID
-- role
-- objective
-- reason selected
-- allowed inputs
-- disallowed work
-- required output
+- Crew Order ID
+- Mission ID and Orbit ID
+- role and READ_ONLY_SCOUT work type when applicable
+- objective and reason selected
+- allowed sources
+- prohibited actions
+- expected return contract
 - dependencies
+- task status
 - authority boundary
 - completion condition
 
@@ -70,25 +71,25 @@ The Crew contract is runtime-independent.
 
 Supported contract modes:
 
-### Sequential
+### Firstmate
 
-One capable agent executes one Crew Order at a time and keeps role outputs separated.
+Firstmate may assign independent READ_ONLY_SCOUT Crew Orders to separate managed workers. The adapter preserves ORBIT identity and constraints, then captures each completed scout report as a role-attributed Crew Return. Firstmate owns spawning, supervision, completion handling, backends, queues, and recovery; it does not own reconciliation or Gate Control.
 
-### Multi-agent
+### Sequential fallback
+
+One capable agent executes one Crew Order at a time and keeps role outputs separated. This remains the reference/fallback adapter.
+
+### Future adapters
 
 A compatible runtime may assign independent Crew Orders to separate workers. Parallel execution is permitted only when dependencies and source boundaries allow it.
 
-### External adapter
+Mission Control owns the plan and Crew semantics. The runtime only executes orders. Runtime task state is provenance and never authority.
 
-A future adapter such as Firstmate may execute the same Crew Orders and return the same role outputs.
+## Crew Returns
 
-Mission Control owns the plan. The runtime only executes it.
+Each completed order produces one Crew Return using `templates/crew-return.md`. A return preserves the original Crew Order ID, Mission/Orbit identity, role, runtime, runtime task/report provenance, completion state, execution timestamps when available, and returned findings.
 
-## Findings
-
-Crew findings must remain role-attributed until reconciliation.
-
-Do not merge Recorder, Systems, and Verifier findings into a single narrative before conflicts are checked.
+Crew findings must remain role-attributed until reconciliation. Do not merge Recorder, Systems, and Verifier findings into a single narrative before conflicts are checked.
 
 ## Reconciliation
 
