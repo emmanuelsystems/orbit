@@ -8,8 +8,12 @@
 - ORBIT order status:
 - Runtime task status:
 - Completion state:
+- ORBIT submission ID:
+- Crew Order SHA-256:
 - Firstmate task ID:
+- Firstmate task generation:
 - Runtime report path / source:
+- Runtime report SHA-256:
 - Execution started at:
 - Execution completed at:
 

@@ -50,7 +50,7 @@ For each Crew Order:
   001-recorder-analyst.md
 ```
 
-`prepare` validates the immutable order and asks Firstmate to scaffold a scout brief. The generated brief visibly carries the Crew Order ID, Mission/Orbit IDs, role, objective, allowed sources, prohibited actions, dependencies, expected return contract, task status, Firstmate task ID, and report path.
+`prepare` requires a fresh Firstmate task ID, fingerprints the complete immutable Crew Order, allocates a unique ORBIT submission ID, and asks Firstmate to scaffold a scout brief. The generated brief visibly carries the Crew Order ID, Mission/Orbit IDs, role, objective, allowed sources, prohibited actions, dependencies, expected return contract, task status, submission ID, Firstmate task ID, report path, and order fingerprint.
 
 Inspect that brief, then submit the same mapping:
 
@@ -60,7 +60,7 @@ Inspect that brief, then submit the same mapping:
   001-recorder-analyst.md
 ```
 
-ORBIT calls Firstmate's spawn script once with `--scout`. Firstmate owns everything after that launch. ORBIT does not watch terminals, poll workers, manage queues, or recover the task.
+Immediately before launch, ORBIT fails closed if the report or Firstmate task-state artifacts already exist. ORBIT then calls Firstmate's spawn script once with `--scout` and binds the successful submission to Firstmate's exact `endpoint_task_id`, `kind=scout`, and per-launch `busy_gen` metadata. A spawn without that trustworthy generation metadata is not collectable. Firstmate owns everything after launch; ORBIT does not watch terminals, poll workers, manage queues, or recover the task.
 
 After Firstmate's task-state surface reports `done` and the scout report exists:
 
@@ -70,9 +70,9 @@ After Firstmate's task-state surface reports `done` and the scout report exists:
   001-recorder-analyst.md
 ```
 
-`collect` writes the matching file under the Orbit's `crew-returns/`. The return records role and runtime attribution, Firstmate task/report provenance, completion state, timestamps when Firstmate metadata provides them, and the returned findings.
+`collect` requires the current Firstmate metadata to match the submitted task generation, snapshots the current report, records its SHA-256, and writes the matching file under the Orbit's `crew-returns/`. The return records role and runtime attribution, ORBIT submission ID, complete Crew Order fingerprint, Firstmate task/generation and report provenance, completion state, timestamps when Firstmate metadata provides them, and the returned findings.
 
-A caller may pass an explicit final task ID when the deterministic ID would collide or exceed Firstmate's task-ID limit. The same ID must be passed to all three actions.
+A caller may pass an explicit final task ID when the deterministic ID would collide or exceed Firstmate's task-ID limit. The same ID must be passed to all three actions. Retrying the same logical Crew Order requires a distinct explicit Firstmate task ID; prior briefs, reports, bindings, or task metadata are never reused.
 
 ## Authority boundary
 
