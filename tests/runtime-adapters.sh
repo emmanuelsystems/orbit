@@ -202,9 +202,25 @@ printf 'working: synthetic scout started\ndone: synthetic systems report complet
 printf 'started_at=2026-08-10T10:00:00Z\ncompleted_at=2026-08-10T10:01:00Z\n' >> "$ORBIT_FIRSTMATE_HOME/state/$task_001.meta"
 printf 'started_at=2026-08-10T10:00:30Z\ncompleted_at=2026-08-10T10:02:00Z\n' >> "$ORBIT_FIRSTMATE_HOME/state/$task_002.meta"
 
-# Provenance C. A matching task ID carrying an old launch generation is rejected.
+# Provenance C. A matching task ID carrying an old launch generation fails closed before analysis.
 generation_001=$(awk -F= '$1 == "busy_gen" { print $2; exit }' "$ORBIT_FIRSTMATE_HOME/state/$task_001.meta")
 sed -i "s/^busy_gen=.*/busy_gen=gtest.old.$task_001/" "$ORBIT_FIRSTMATE_HOME/state/$task_001.meta"
+blocked_orbit_before=$(find "$orbit" -type f -print0 | sort -z | xargs -0 cksum)
+if "$ROOT/bin/orbit" analyze "$slug" "$orbit_id" >"$TMP/stale-analysis.out" 2>&1; then
+  echo 'FAIL: analyze continued after stale Firstmate provenance' >&2
+  exit 1
+fi
+grep -F 'FLIGHT STATUS: HOLD — FIRSTMATE PROVENANCE BLOCKED' "$TMP/stale-analysis.out" >/dev/null
+grep -F 'Order: 001-recorder-analyst.md' "$TMP/stale-analysis.out" >/dev/null
+grep -F 'task generation does not match the submitted provenance binding' "$TMP/stale-analysis.out" >/dev/null
+if grep -F 'READY FOR SEQUENTIAL' "$TMP/stale-analysis.out" >/dev/null; then
+  echo 'FAIL: stale Firstmate collection started sequential work' >&2
+  exit 1
+fi
+[ "$(find "$orbit" -type f -print0 | sort -z | xargs -0 cksum)" = "$blocked_orbit_before" ]
+[ "$(cksum "$orbit/gate-log.md")" = "$gate_before" ]
+[ "$(cksum "$orbit/reconciliation.md")" = "$reconciliation_before" ]
+[ ! -f "$orbit/crew-returns/001-recorder-analyst.md" ]
 if "$ROOT/bin/orbit" runtime firstmate collect "$slug" "$orbit_id" 001-recorder-analyst.md >"$TMP/old-generation.out" 2>&1; then
   echo 'FAIL: Firstmate adapter accepted old submission provenance' >&2
   exit 1
@@ -360,6 +376,55 @@ legacy_out=$("$ROOT/bin/orbit" runtime sequential prepare "$legacy_slug" "$legac
 printf '%s\n' "$legacy_out" | grep -F 'Crew Order ID: 001' >/dev/null
 printf '%s\n' "$legacy_out" | grep -F 'Runtime: sequential' >/dev/null
 grep -F 'mode: sequential' "$legacy_mission/crew.yaml" >/dev/null
+
+# An untyped legacy-shaped order is ineligible for Firstmate scouts and cannot mutate analysis artifacts.
+legacy_firstmate_slug=legacy-firstmate-mission
+legacy_firstmate_orbit=2026-08-09
+legacy_firstmate_mission="$ORBIT_HOME/missions/$legacy_firstmate_slug"
+legacy_firstmate_path="$legacy_firstmate_mission/orbits/$legacy_firstmate_orbit"
+mkdir -p "$legacy_firstmate_mission/state" "$legacy_firstmate_path/crew-orders" "$legacy_firstmate_path/crew-returns"
+printf '# Legacy accepted state\n' > "$legacy_firstmate_mission/state/current.md"
+printf 'execution:\n  mode: firstmate\n  fallback: sequential\n' > "$legacy_firstmate_mission/crew.yaml"
+printf '# Synthetic source index\n- Status: `PINNED_SYNTHETIC_STRUCTURE`\n' > "$legacy_firstmate_path/source-index.md"
+cat > "$legacy_firstmate_path/crew-orders/001-recorder-analyst.md" <<'LEGACY_FIRSTMATE_ORDER'
+# Crew Order
+
+- Order ID: 001
+- Mission: legacy-firstmate-mission
+- Orbit date: 2026-08-09
+- Role: Recorder Analyst
+- Status: `PLANNED`
+
+## Objective
+
+Read a bounded synthetic source.
+
+## Allowed inputs
+
+- synthetic source locator
+
+## Explicitly disallowed
+
+- implementation
+- external Dispatch
+- Mission State promotion
+
+## Required output
+
+Role-attributed findings.
+
+## Dependencies
+
+None.
+LEGACY_FIRSTMATE_ORDER
+legacy_firstmate_before=$(find "$legacy_firstmate_path" -type f -print0 | sort -z | xargs -0 cksum)
+if "$ROOT/bin/orbit" analyze "$legacy_firstmate_slug" "$legacy_firstmate_orbit" >"$TMP/legacy-firstmate.out" 2>&1; then
+  echo 'FAIL: Firstmate analysis accepted an untyped legacy Crew Order' >&2
+  exit 1
+fi
+grep -F 'FLIGHT STATUS: HOLD — FIRSTMATE PROVENANCE BLOCKED' "$TMP/legacy-firstmate.out" >/dev/null
+grep -F 'Firstmate adapter accepts only Order type READ_ONLY_SCOUT' "$TMP/legacy-firstmate.out" >/dev/null
+[ "$(find "$legacy_firstmate_path" -type f -print0 | sort -z | xargs -0 cksum)" = "$legacy_firstmate_before" ]
 
 v02_slug=legacy-v02-mission
 v02_mission="$ORBIT_HOME/missions/$v02_slug"

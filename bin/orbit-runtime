@@ -12,6 +12,7 @@ Usage:
   ./bin/orbit runtime firstmate prepare <mission-slug> <orbit-id> <order-file> [firstmate-task-id]
   ./bin/orbit runtime firstmate submit  <mission-slug> <orbit-id> <order-file> [firstmate-task-id]
   ./bin/orbit runtime firstmate collect <mission-slug> <orbit-id> <order-file> [firstmate-task-id]
+  ./bin/orbit runtime firstmate preflight <mission-slug> <orbit-id> <order-file> [firstmate-task-id]
   ./bin/orbit runtime sequential prepare <mission-slug> <orbit-id> <order-file>
 
 The adapter accepts only READ_ONLY_SCOUT Firstmate orders. `prepare` creates an
@@ -137,6 +138,7 @@ resolve_context() {
   PROHIBITED_ACTIONS=$(order_section "Prohibited actions" "Explicitly disallowed" || true)
   DEPENDENCIES=$(order_section "Dependencies" || true)
   EXPECTED_RETURN=$(order_section "Expected return contract" "Required output" || true)
+  AUTHORITY_BOUNDARY=$(order_section "Authority boundary" || true)
 
   [ -n "$ORDER_ID" ] || { echo "error: Crew Order is missing Crew Order ID" >&2; exit 1; }
   [ -n "$ORDER_MISSION_ID" ] || { echo "error: Crew Order is missing Mission ID" >&2; exit 1; }
@@ -173,6 +175,7 @@ validate_firstmate_scout_order() {
   [ -n "$PROHIBITED_ACTIONS" ] || { echo "error: Firstmate scout order is missing Prohibited actions" >&2; exit 1; }
   [ -n "$DEPENDENCIES" ] || { echo "error: Firstmate scout order is missing Dependencies (use None when independent)" >&2; exit 1; }
   [ -n "$EXPECTED_RETURN" ] || { echo "error: Firstmate scout order is missing Expected return contract" >&2; exit 1; }
+  [ -n "$AUTHORITY_BOUNDARY" ] || { echo "error: Firstmate scout order is missing Authority boundary" >&2; exit 1; }
 
   printf '%s\n' "$PROHIBITED_ACTIONS" | grep -Eqi 'modif.*project|project files.*modif|scratch commit' || {
     echo "error: Prohibited actions must explicitly keep project files read-only" >&2
@@ -603,6 +606,52 @@ submit_firstmate() {
   echo 'Firstmate owns supervision, completion handling, queues, backend lifecycle, and recovery for this task.'
 }
 
+preflight_firstmate() {
+  local binding_status firstmate_state
+
+  if [ ! -e "$FIRSTMATE_BINDING_PATH" ] && [ ! -L "$FIRSTMATE_BINDING_PATH" ]; then
+    ensure_fresh_firstmate_attempt
+    printf 'FIRSTMATE PREFLIGHT: READY_TO_PREPARE\nOrder: %s\n' "$ORDER_ID"
+    return 0
+  fi
+
+  binding_status=$(binding_field status || true)
+  case "$binding_status" in
+    PREPARED)
+      validate_binding PREPARED
+      ensure_report_absent_at_submit
+      printf 'FIRSTMATE PREFLIGHT: READY_TO_SUBMIT\nOrder: %s\n' "$ORDER_ID"
+      ;;
+    SUBMITTED)
+      validate_binding SUBMITTED
+      firstmate_state=$(FM_HOME="$FIRSTMATE_HOME" "$CREW_STATE_SCRIPT" "$FIRSTMATE_TASK_ID" 2>&1) || {
+        echo 'error: Firstmate task state cannot be read for the submitted provenance binding' >&2
+        exit 1
+      }
+      case "$firstmate_state" in
+        state:\ done\ *)
+          [ -f "$FIRSTMATE_REPORT_PATH" ] && [ ! -L "$FIRSTMATE_REPORT_PATH" ] || {
+            echo 'error: completed Firstmate task is missing a regular scout report for the submitted provenance binding' >&2
+            exit 1
+          }
+          printf 'FIRSTMATE PREFLIGHT: READY_TO_COLLECT\nOrder: %s\n' "$ORDER_ID"
+          ;;
+        *)
+          [ ! -e "$FIRSTMATE_REPORT_PATH" ] && [ ! -L "$FIRSTMATE_REPORT_PATH" ] || {
+            echo 'error: Firstmate scout report exists before the submitted task is complete' >&2
+            exit 1
+          }
+          printf 'FIRSTMATE PREFLIGHT: AWAITING_FIRSTMATE_COMPLETION\nOrder: %s\n' "$ORDER_ID"
+          ;;
+      esac
+      ;;
+    *)
+      echo "error: Firstmate submission binding is stale, incompatible, missing status, or already bound (status: ${binding_status:-MISSING})" >&2
+      exit 1
+      ;;
+  esac
+}
+
 collect_firstmate() {
   local firstmate_state started_at completed_at return_tmp report_snapshot source_report_sha
   validate_binding SUBMITTED
@@ -695,13 +744,14 @@ TASK_ID_OVERRIDE=${6:-}
 resolve_context
 
 case "$ADAPTER:$ACTION" in
-  firstmate:prepare|firstmate:submit|firstmate:collect)
+  firstmate:prepare|firstmate:submit|firstmate:collect|firstmate:preflight)
     validate_firstmate_scout_order
     resolve_firstmate
     case "$ACTION" in
       prepare) prepare_firstmate ;;
       submit) submit_firstmate ;;
       collect) collect_firstmate ;;
+      preflight) preflight_firstmate ;;
     esac
     ;;
   sequential:prepare)

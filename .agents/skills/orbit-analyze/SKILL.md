@@ -49,7 +49,11 @@ Use the Mission `crew.yaml` execution mode.
 
 ### Firstmate
 
-Read `runtimes/firstmate.md`. Phase 2 accepts only `READ_ONLY_SCOUT` orders. Use `./bin/orbit runtime firstmate prepare`, inspect the generated scout brief, then `submit`. Firstmate owns worker spawning, isolation, task lifecycle, queues, supervision, completion, backends, and recovery.
+Read `runtimes/firstmate.md`. Run `./bin/orbit analyze <mission> <orbit>` before any Firstmate analysis. It requires every active order to declare the complete `READ_ONLY_SCOUT` contract and fails closed on stale, incompatible, missing, or already-bound provenance.
+
+On a Firstmate provenance HOLD, stop. Name the blocked order and reason; do not select sequential, create a replacement Crew Return, reconcile, update Mission Packet artifacts as completed analysis, or create GO. Sequential is available only when `crew.yaml` explicitly selects `mode: sequential`.
+
+For a ready order, use `./bin/orbit runtime firstmate prepare`, inspect the generated scout brief, then `submit`. Firstmate owns worker spawning, isolation, task lifecycle, queues, supervision, completion, backends, and recovery.
 
 After Firstmate records completion, use `collect` to capture each report as the matching role-attributed ORBIT Crew Return. Do not reconcile while required orders remain in flight. Firstmate completion, findings, recommendations, and consensus do not create or broaden GO.
 

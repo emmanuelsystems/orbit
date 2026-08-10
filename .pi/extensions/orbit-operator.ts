@@ -17,7 +17,7 @@ const COMMANDS = {
     skill: "orbit-analyze",
     description: "Execute existing ORBIT Crew Orders through the configured runtime",
     safety:
-      "Use existing Crew Orders only. Do not plan, invent agents, create GO, broaden authority, or Dispatch.",
+      "Use existing Crew Orders only. Stop on any Firstmate eligibility or provenance HOLD; do not fall back to sequential, create GO, broaden authority, or Dispatch.",
   },
   "orbit-status": {
     skill: "orbit-status",

@@ -7,6 +7,24 @@ mission="$ORBIT_HOME/missions/$slug"
 [ -d "$mission" ] || { echo "error: unknown Mission: $slug" >&2; exit 1; }
 printf 'ORBIT // MISSION CONTROL\nMission: %s\nHome: %s\nAccepted Mission State: %s\nCrew Manifest: %s\n' "$slug" "$mission" "$mission/state/current.md" "$mission/crew.yaml"
 latest="$(find "$mission/orbits" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null | sort | tail -1 || true)"
+section_entries() {
+  local file heading
+  file=$1
+  heading=$2
+  awk -v heading="$heading" '
+    $0 == heading { found = 1; next }
+    found && /^## / { exit }
+    found {
+      line = $0
+      sub(/^[[:space:]]+/, "", line)
+      sub(/[[:space:]]+$/, "", line)
+      if (line == "" || line == "-" || line ~ /^[|[:space:]-]+$/) next
+      if (line ~ /^\| (Item|---)/) next
+      print line
+    }
+  ' "$file"
+}
+
 if [ -n "$latest" ]; then
   orbit="$mission/orbits/$latest"
   orders="$(find "$orbit/crew-orders" -maxdepth 1 -type f -name '*.md' 2>/dev/null | wc -l | tr -d ' ')"
@@ -19,7 +37,31 @@ if [ -n "$latest" ]; then
   printf 'Crew Returns: %s\n' "$returns"
   [ -f "$orbit/reconciliation.md" ] && echo 'Reconciliation: AVAILABLE'
   [ -f "$orbit/gate-log.md" ] && echo 'Gate Control: AVAILABLE'
-  [ -f "$orbit/decision-action-register.md" ] && echo 'Decision register: READY FOR REVIEW'
+  if [ -f "$orbit/decision-action-register.md" ]; then
+    echo 'Decision register: READY FOR REVIEW'
+    if grep -Fx '## Flight Plan' "$orbit/decision-action-register.md" >/dev/null; then
+      echo 'Flight Plan: AVAILABLE (decision-action-register.md#Flight Plan)'
+    else
+      echo 'Flight Plan: NOT_REPORTED'
+    fi
+  else
+    echo 'Decision register: NOT_REPORTED'
+    echo 'Flight Plan: NOT_REPORTED'
+  fi
+  if [ -f "$orbit/candidate-mission-state.md" ]; then
+    candidate_status=$(awk -F': ' '/^Status:/ { print $2; exit }' "$orbit/candidate-mission-state.md")
+    printf 'Candidate Mission State: AVAILABLE (%s; %s)\n' 'candidate-mission-state.md' "${candidate_status:-status not reported}"
+    holds=$(section_entries "$orbit/candidate-mission-state.md" '## NO-GO holds')
+  else
+    echo 'Candidate Mission State: NOT_REPORTED'
+    holds=''
+  fi
+  if [ -n "$holds" ]; then
+    echo 'Active holds:'
+    printf '%s\n' "$holds" | sed 's/^/  /'
+  else
+    echo 'Active holds: NONE_REPORTED'
+  fi
 else
   echo 'Latest Orbit: none'
 fi

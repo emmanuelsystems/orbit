@@ -28,9 +28,29 @@ if [ "$orders" -eq 0 ]; then
   echo 'Do not silently generate orders.' >&2
   exit 1
 elif [ "$runtime" = firstmate ]; then
-  echo 'FLIGHT STATUS: CREW ORDERS READY FOR FIRSTMATE'
-  echo 'Next: use `orbit runtime firstmate prepare`, inspect the scout brief, then submit and collect each completed report.'
-  echo 'After returns are captured, invoke $orbit-analyze for ORBIT-owned reconciliation and Gate Control.'
+  active_orders=0
+  while IFS= read -r order; do
+    order_name=$(basename "$order")
+    [ -f "$orbit/crew-returns/$order_name" ] && continue
+    active_orders=$((active_orders + 1))
+    if ! preflight=$("$ROOT/bin/orbit" runtime firstmate preflight "$slug" "$date" "$order_name" 2>&1); then
+      reason=$(printf '%s\n' "$preflight" | awk '/^error:/ { sub(/^error: /, ""); print; exit }')
+      [ -n "$reason" ] || reason='Firstmate preflight could not verify immutable order provenance'
+      printf 'FLIGHT STATUS: HOLD — FIRSTMATE PROVENANCE BLOCKED\nOrder: %s\nReason: %s\n' "$order_name" "$reason"
+      echo 'Analysis stopped. No sequential fallback, Crew Return, reconciliation, Mission Packet, or Gate Control mutation was started.'
+      echo 'Sequential execution is available only when crew.yaml explicitly selects mode: sequential.'
+      exit 1
+    fi
+  done < <(find "$orbit/crew-orders" -maxdepth 1 -type f -name '*.md' -print | sort)
+  if [ "$active_orders" -eq 0 ]; then
+    echo 'FLIGHT STATUS: NO ACTIVE FIRSTMATE ORDERS'
+    echo 'All Crew Orders already have matching Crew Returns. Reconcile only through the configured ORBIT operator flow.'
+  else
+    echo 'FLIGHT STATUS: CREW ORDERS READY FOR FIRSTMATE'
+    echo 'Each active order passed read-only eligibility and provenance preflight.'
+    echo 'Next: use `orbit runtime firstmate prepare`, inspect the scout brief, then submit and collect each completed report.'
+    echo 'After returns are captured, invoke $orbit-analyze for ORBIT-owned reconciliation and Gate Control.'
+  fi
 elif [ "$runtime" = sequential ]; then
   echo 'FLIGHT STATUS: CREW ORDERS READY FOR SEQUENTIAL FALLBACK'
   echo 'Next: invoke $orbit-analyze in your agent to execute bounded sequential passes and reconcile returns.'
