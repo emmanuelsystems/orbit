@@ -95,8 +95,9 @@ brief_002="$ORBIT_FIRSTMATE_HOME/data/$task_002/brief.md"
 
 # A. Crew Order -> Firstmate scout mapping.
 [ -n "$task_001" ] && [ -n "$task_002" ] && [ "$task_001" != "$task_002" ]
-grep -F -- "$task_001|orbit|--scout" "$ORBIT_FIRSTMATE_HOME/brief-calls.log" >/dev/null
-grep -F -- "$task_002|orbit|--scout" "$ORBIT_FIRSTMATE_HOME/brief-calls.log" >/dev/null
+project_name=$(basename "$ORBIT_FIRSTMATE_PROJECT")
+grep -F -- "$task_001|$project_name|--scout" "$ORBIT_FIRSTMATE_HOME/brief-calls.log" >/dev/null
+grep -F -- "$task_002|$project_name|--scout" "$ORBIT_FIRSTMATE_HOME/brief-calls.log" >/dev/null
 grep -F -- '- Runtime: firstmate' "$brief_001" >/dev/null
 grep -F -- "- Firstmate report path: $report_001" "$brief_001" >/dev/null
 
