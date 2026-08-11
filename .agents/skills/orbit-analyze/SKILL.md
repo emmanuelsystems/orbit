@@ -45,11 +45,11 @@ If `crew-orders/` contains no active orders, stop and invoke or recommend `$orbi
 
 ## Runtime
 
-Use the Mission `crew.yaml` execution mode.
+Use the Mission `crew.yaml` execution mode. Missing, empty, malformed, or unsupported `execution.mode` is a configuration HOLD; never default to sequential.
 
 ### Firstmate
 
-Read `runtimes/firstmate.md`. Run `./bin/orbit analyze <mission> <orbit>` before any Firstmate analysis. It requires every active order to declare the complete `READ_ONLY_SCOUT` contract and fails closed on stale, incompatible, missing, or already-bound provenance.
+Read `runtimes/firstmate.md`. Run `./bin/orbit analyze <mission> <orbit>` before any Firstmate analysis. It requires every active order to declare the canonical Crew Order v1 `READ_ONLY_SCOUT` contract and fails closed on stale, incompatible, missing, duplicate, non-resumable, artifact-only, or already-bound provenance for the logical order.
 
 On a Firstmate provenance HOLD, stop. Name the blocked order and reason; do not select sequential, create a replacement Crew Return, reconcile, update Mission Packet artifacts as completed analysis, or create GO. Sequential is available only when `crew.yaml` explicitly selects `mode: sequential`.
 

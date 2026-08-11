@@ -25,6 +25,72 @@ section_entries() {
   ' "$file"
 }
 
+authoritative_active_holds() {
+  local file=$1 table_holds summary_holds
+  table_holds=$(awk -F'|' '
+    function trim(value) {
+      sub(/^[[:space:]]+/, "", value)
+      sub(/[[:space:]]+$/, "", value)
+      return value
+    }
+    function normalized_status(value) {
+      value = trim(value)
+      gsub(/`/, "", value)
+      gsub(/-/, "_", value)
+      gsub(/[[:space:]]/, "", value)
+      return toupper(value)
+    }
+    function valid_source(value) {
+      return value == "FLIGHT_RECORDER" || value == "HUMAN_DIRECTIVE" || value == "HUMAN_REVIEW"
+    }
+    /^[|][[:space:]]*Order[[:space:]]*[|]/ { in_table = 1; next }
+    in_table && /^## / { exit }
+    in_table && /^[|]/ {
+      order = trim($2)
+      item = trim($3)
+      status = normalized_status($4)
+      authority = trim($5)
+      source = trim($6)
+      scope = trim($7)
+      reason = trim($8)
+      release = trim($9)
+      supersedes = trim($10)
+      gsub(/`/, "", supersedes)
+      if (item == "" || item == "---" || !valid_source(source) || authority == "" || tolower(authority) == "none") next
+      if (status != "GO" && status != "NO_GO" && status != "PENDING" && status != "OBSERVED") next
+      key = item SUBSEP scope
+      latest_order[key] = order
+      latest_status[key] = status
+      latest_authority[key] = authority
+      latest_source[key] = source
+      latest_scope[key] = scope
+      latest_reason[key] = reason
+      latest_release[key] = release
+      if (supersedes != "" && tolower(supersedes) != "none") {
+        count = split(supersedes, superseded_ids, /[ ,]+/)
+        for (i = 1; i <= count; i++) superseded[superseded_ids[i]] = 1
+      }
+    }
+    END {
+      for (key in latest_status) if (latest_status[key] == "NO_GO" && !superseded[latest_order[key]])
+        printf "%s\t%s\t%s\t%s\t%s\t%s\n", substr(key, 1, index(key, SUBSEP) - 1), latest_authority[key], latest_source[key], latest_scope[key], latest_reason[key], latest_release[key]
+    }
+  ' "$file" | sort)
+  if [ -n "$table_holds" ]; then
+    printf '%s\n' "$table_holds"
+    return 0
+  fi
+
+  # Gate Log's Active Gate State is the existing ORBIT summary of the newest
+  # valid authority events. Use it when a table is not present in a fixture.
+  summary_holds=$(awk '
+    /^## Active Gate State[[:space:]]*$/ { active = 1; next }
+    active && /^## / { exit }
+    active && $0 ~ /NO[_-]GO/ { print }
+  ' "$file")
+  [ -n "$summary_holds" ] && printf '%s\n' "$summary_holds"
+}
+
 if [ -n "$latest" ]; then
   orbit="$mission/orbits/$latest"
   orders="$(find "$orbit/crew-orders" -maxdepth 1 -type f -name '*.md' 2>/dev/null | wc -l | tr -d ' ')"
@@ -48,19 +114,34 @@ if [ -n "$latest" ]; then
     echo 'Decision register: NOT_REPORTED'
     echo 'Flight Plan: NOT_REPORTED'
   fi
+  candidate_holds=''
   if [ -f "$orbit/candidate-mission-state.md" ]; then
     candidate_status=$(awk -F': ' '/^Status:/ { print $2; exit }' "$orbit/candidate-mission-state.md")
     printf 'Candidate Mission State: AVAILABLE (%s; %s)\n' 'candidate-mission-state.md' "${candidate_status:-status not reported}"
-    holds=$(section_entries "$orbit/candidate-mission-state.md" '## NO-GO holds')
+    candidate_holds=$(section_entries "$orbit/candidate-mission-state.md" '## NO-GO holds')
   else
     echo 'Candidate Mission State: NOT_REPORTED'
-    holds=''
   fi
+
+  holds=$(authoritative_active_holds "$orbit/gate-log.md" 2>/dev/null || true)
   if [ -n "$holds" ]; then
     echo 'Active holds:'
-    printf '%s\n' "$holds" | sed 's/^/  /'
+    while IFS=$'\t' read -r item authority source scope reason release; do
+      if [ -n "$authority" ]; then
+        printf '  %s [NO_GO; authority=%s; source=%s; scope=%s]' "$item" "$authority" "$source" "$scope"
+        [ -n "$reason" ] && printf ' — %s' "$reason"
+        [ -n "$release" ] && printf ' (release: %s)' "$release"
+        printf '\n'
+      else
+        printf '  %s\n' "$item"
+      fi
+    done <<< "$holds"
   else
     echo 'Active holds: NONE_REPORTED'
+    if [ -n "$candidate_holds" ]; then
+      echo 'Candidate holds awaiting human review:'
+      printf '%s\n' "$candidate_holds" | sed 's/^/  /'
+    fi
   fi
 else
   echo 'Latest Orbit: none'

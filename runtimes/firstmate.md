@@ -42,7 +42,7 @@ No backend is selected by ORBIT unless `ORBIT_FIRSTMATE_BACKEND` is set. Firstma
 
 ## Explicit workflow
 
-Before Firstmate analysis, run `./bin/orbit analyze <mission> <orbit>`. It read-only preflights every active order: all required `READ_ONLY_SCOUT` fields must be explicit, and any existing submission binding must be compatible with the immutable order and current Firstmate generation. A stale, incompatible, missing, or already-bound provenance record produces an ORBIT HOLD naming the order and reason. The HOLD does not select sequential, create a Crew Return, reconcile, alter a Mission Packet, or create GO. Sequential runs only when Mission `crew.yaml` explicitly selects it.
+Before Firstmate analysis, run `./bin/orbit analyze <mission> <orbit>`. It read-only preflights every active order: canonical Crew Order v1 identity and `READ_ONLY_SCOUT` fields must be explicit, and binding discovery covers the logical order rather than only the requested Firstmate task ID. Zero bindings are ready to prepare; one authoritative binding resumes its recorded task; malformed, mismatched, duplicate, non-resumable, or artifact-only provenance produces an ORBIT HOLD naming the order and reason. A HOLD does not select sequential, create a Crew Return, reconcile, alter a Mission Packet, or create GO. Missing, empty, malformed, and unsupported `execution.mode` values also HOLD before any Crew path. Sequential runs only when Mission `crew.yaml` explicitly selects it.
 
 For each Crew Order:
 

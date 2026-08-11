@@ -129,6 +129,9 @@ if "$ROOT/bin/orbit" runtime firstmate submit "$slug" "$orbit_id" 001-recorder-a
   exit 1
 fi
 grep -F 'report predates the current submission' "$TMP/stale-at-submit.out" >/dev/null
+# The stale-attempt fixture is isolated so it cannot create a second logical
+# binding for the acceptance order.
+rm -rf "$orbit/runtime/firstmate/$stale_after_prepare.binding" "$ORBIT_FIRSTMATE_HOME/data/$stale_after_prepare"
 
 prepare_001=$("$ROOT/bin/orbit" runtime firstmate prepare "$slug" "$orbit_id" 001-recorder-analyst.md)
 prepare_002=$("$ROOT/bin/orbit" runtime firstmate prepare "$slug" "$orbit_id" 002-systems-analyst.md)
@@ -268,27 +271,30 @@ sed -i 's/kind=implementation/kind=scout/' "$ORBIT_FIRSTMATE_HOME/state/$task_00
 
 # Provenance G. Collection without the submitted binding is rejected.
 missing_binding_task=missing-binding-attempt
-"$ROOT/bin/orbit" runtime firstmate prepare "$slug" "$orbit_id" 001-recorder-analyst.md "$missing_binding_task" >/dev/null
-"$ROOT/bin/orbit" runtime firstmate submit "$slug" "$orbit_id" 001-recorder-analyst.md "$missing_binding_task" >/dev/null
+sed -e 's/Crew Order ID: 002/Crew Order ID: 003/' \
+  -e 's/002-systems-analyst/003-missing-binding/' \
+  "$orbit/crew-orders/002-systems-analyst.md" > "$orbit/crew-orders/003-missing-binding.md"
+"$ROOT/bin/orbit" runtime firstmate prepare "$slug" "$orbit_id" 003-missing-binding.md "$missing_binding_task" >/dev/null
+"$ROOT/bin/orbit" runtime firstmate submit "$slug" "$orbit_id" 003-missing-binding.md "$missing_binding_task" >/dev/null
 rm "$orbit/runtime/firstmate/$missing_binding_task.binding"
-if "$ROOT/bin/orbit" runtime firstmate collect "$slug" "$orbit_id" 001-recorder-analyst.md "$missing_binding_task" >"$TMP/missing-binding.out" 2>&1; then
+if "$ROOT/bin/orbit" runtime firstmate collect "$slug" "$orbit_id" 003-missing-binding.md "$missing_binding_task" >"$TMP/missing-binding.out" 2>&1; then
   echo 'FAIL: Firstmate adapter collected without a submission binding' >&2
   exit 1
 fi
-grep -F 'missing Firstmate submission binding' "$TMP/missing-binding.out" >/dev/null
+grep -F 'without an authoritative binding' "$TMP/missing-binding.out" >/dev/null
+# Do not leave an unbound task artifact that could be mistaken for a new
+# logical attempt after this negative provenance case.
+rm -rf "$ORBIT_FIRSTMATE_HOME/data/$missing_binding_task" "$ORBIT_FIRSTMATE_HOME/state/$missing_binding_task" "$ORBIT_FIRSTMATE_HOME/state/$missing_binding_task.meta" "$ORBIT_FIRSTMATE_HOME/state/$missing_binding_task.status"
 
-# Provenance H. Re-running one logical order requires a distinct task and submission identity.
+# Provenance H. A logical Crew Order cannot be prepared again under a new
+# Firstmate task ID once its authoritative binding exists.
 rerun_task=rerun-recorder-attempt
-rerun_prepare=$("$ROOT/bin/orbit" runtime firstmate prepare "$slug" "$orbit_id" 001-recorder-analyst.md "$rerun_task")
-rerun_submission=$(printf '%s\n' "$rerun_prepare" | awk -F': ' '/^ORBIT submission ID:/ { print $2; exit }')
-[ -n "$rerun_submission" ] && [ "$rerun_submission" != "$submission_001" ]
-"$ROOT/bin/orbit" runtime firstmate submit "$slug" "$orbit_id" 001-recorder-analyst.md "$rerun_task" >/dev/null
-[ -f "$report_001" ]
-if "$ROOT/bin/orbit" runtime firstmate collect "$slug" "$orbit_id" 001-recorder-analyst.md "$rerun_task" >"$TMP/rerun-prior-report.out" 2>&1; then
-  echo 'FAIL: rerun consumed the prior Firstmate report' >&2
+if "$ROOT/bin/orbit" runtime firstmate prepare "$slug" "$orbit_id" 001-recorder-analyst.md "$rerun_task" >"$TMP/rerun-duplicate.out" 2>&1; then
+  echo 'FAIL: duplicate logical Crew Order prepare was accepted' >&2
   exit 1
 fi
-grep -F "Firstmate report not found: $ORBIT_FIRSTMATE_HOME/data/$rerun_task/report.md" "$TMP/rerun-prior-report.out" >/dev/null
+grep -F 'refusing duplicate prepare' "$TMP/rerun-duplicate.out" >/dev/null
+[ ! -f "$ORBIT_FIRSTMATE_HOME/data/$rerun_task/brief.md" ]
 
 # Provenance A. A current matching task generation and report are accepted.
 "$ROOT/bin/orbit" runtime firstmate collect "$slug" "$orbit_id" 001-recorder-analyst.md >/dev/null
