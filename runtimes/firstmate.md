@@ -52,6 +52,25 @@ For each Crew Order:
   001-recorder-analyst.md
 ```
 
+A historical binding may be retired only through an explicit human-invoked
+operation. The command requires the exact Mission, Orbit, Crew Order, and
+Firstmate task identity; it verifies the immutable binding, preserved brief /
+report / task metadata, and a terminal non-active Firstmate state before
+changing only the ORBIT binding status to `RETIRED`:
+
+```sh
+./bin/orbit runtime firstmate retire \
+  systems-shaper-weekly-huddle 2026-07-31 \
+  001-recorder-analyst.md \
+  orb-20260731-recorder-acceptance
+```
+
+Retirement retains the original submission, task, report, hashes, and runtime
+provenance in place and adds retirement provenance. Retired history is ignored
+as a current execution binding; malformed, orphaned, mismatched, and multiple
+current bindings still hold. A fresh prepare uses a distinct task identity and
+never overwrites retired Firstmate artifacts.
+
 `prepare` requires a fresh Firstmate task ID, fingerprints the complete immutable Crew Order, allocates a unique ORBIT submission ID, and asks Firstmate to scaffold a scout brief. The generated brief visibly carries the Crew Order ID, Mission/Orbit IDs, role, objective, allowed sources, prohibited actions, dependencies, expected return contract, task status, submission ID, Firstmate task ID, report path, and order fingerprint.
 
 Inspect that brief, then submit the same mapping:

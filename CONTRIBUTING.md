@@ -16,6 +16,7 @@ ORBIT is currently an alpha agent distro for recurring meetings.
 ./tests/runtime-adapters.sh
 ./tests/smoke.sh
 ./tests/pi-operator.sh
+./tests/firstmate-retirement.sh
 ```
 
 A change is not ready if the smoke test fails or if shell tooling copies Flight Recorder content into private ORBIT state by default.
