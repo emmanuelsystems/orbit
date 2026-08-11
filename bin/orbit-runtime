@@ -1,0 +1,1391 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ORBIT_HOME="${ORBIT_HOME:-$HOME/.orbit}"
+
+usage() {
+  cat <<'USAGE'
+ORBIT Crew Runtime Adapter
+
+Usage:
+  ./bin/orbit runtime firstmate prepare <mission-slug> <orbit-id> <order-file> [firstmate-task-id]
+  ./bin/orbit runtime firstmate submit  <mission-slug> <orbit-id> <order-file> [firstmate-task-id]
+  ./bin/orbit runtime firstmate collect <mission-slug> <orbit-id> <order-file> [firstmate-task-id]
+  ./bin/orbit runtime firstmate preflight <mission-slug> <orbit-id> <order-file> [firstmate-task-id]
+  ./bin/orbit runtime firstmate retire <mission-slug> <orbit-id> <order-file> <firstmate-task-id>
+  ./bin/orbit runtime sequential prepare <mission-slug> <orbit-id> <order-file>
+
+The adapter accepts only READ_ONLY_SCOUT Firstmate orders. `prepare` creates an
+inspectable Firstmate scout brief, `submit` delegates spawning to Firstmate,
+`collect` captures a completed scout report as an ORBIT Crew Return, and
+`retire` is an explicit human-invoked terminalization of a preserved historical
+binding. It never runs implementation or Dispatch, changes Gate Control,
+reconciles findings, or promotes Mission State.
+
+Configuration:
+  ORBIT_FIRSTMATE_ROOT     Firstmate distro containing fm-brief, fm-spawn, and fm-crew-state scripts
+                           (default: ~/code/firstmate)
+  ORBIT_FIRSTMATE_HOME     Firstmate operational home (default: ORBIT_FIRSTMATE_ROOT)
+  ORBIT_FIRSTMATE_PROJECT  project checkout Firstmate uses for scout worktrees
+                           (default: this ORBIT checkout)
+  ORBIT_FIRSTMATE_BACKEND  optional backend passed unchanged to Firstmate
+USAGE
+}
+
+trim_backticks() {
+  local value=$1
+  case "$value" in
+    \`*\`) value=${value#\`}; value=${value%\`} ;;
+  esac
+  printf '%s\n' "$value"
+}
+
+order_field() {
+  local label value
+  for label in "$@"; do
+    value=$(awk -v prefix="- $label:" '
+      index($0, prefix) == 1 {
+        value = substr($0, length(prefix) + 1)
+        sub(/^[[:space:]]+/, "", value)
+        print value
+        exit
+      }
+    ' "$ORDER_PATH")
+    if [ -n "$value" ]; then
+      trim_backticks "$value"
+      return 0
+    fi
+  done
+  return 1
+}
+
+order_section() {
+  local heading value
+  for heading in "$@"; do
+    value=$(awk -v wanted="## $heading" '
+      $0 == wanted { found = 1; next }
+      found && /^## / { exit }
+      found { lines[++count] = $0 }
+      END {
+        first = 1
+        while (first <= count && lines[first] ~ /^[[:space:]]*$/) first++
+        last = count
+        while (last >= first && lines[last] ~ /^[[:space:]]*$/) last--
+        for (i = first; i <= last; i++) print lines[i]
+      }
+    ' "$ORDER_PATH")
+    if printf '%s\n' "$value" | grep -q '[^[:space:]]'; then
+      printf '%s\n' "$value"
+      return 0
+    fi
+  done
+  return 1
+}
+
+canonical_order_field() {
+  local label value count
+  count=$(awk -v prefix="- $1:" 'index($0, prefix) == 1 { count++ } END { print count + 0 }' "$ORDER_PATH")
+  [ "$count" = 1 ] || return 1
+  value=$(awk -v prefix="- $1:" '
+    index($0, prefix) == 1 {
+      value = substr($0, length(prefix) + 1)
+      sub(/^[[:space:]]+/, "", value)
+      print value
+      exit
+    }
+  ' "$ORDER_PATH")
+  [ -n "$value" ] || return 1
+  trim_backticks "$value"
+}
+
+canonical_order_section() {
+  local heading=$1 count
+  count=$(grep -Fxc "## $heading" "$ORDER_PATH" || true)
+  [ "$count" = 1 ] || return 1
+  order_section "$heading"
+}
+
+safe_task_id() {
+  local task_id=$1
+  [ -n "$task_id" ] || return 1
+  [ "${#task_id}" -le 64 ] || return 1
+  case "$task_id" in
+    .*|*[!A-Za-z0-9._-]*) return 1 ;;
+  esac
+}
+
+slugify_task_id() {
+  printf '%s' "$1" \
+    | tr '[:upper:]' '[:lower:]' \
+    | sed 's/[^a-z0-9._-]/-/g; s/--*/-/g; s/^-//; s/-$//'
+}
+
+fingerprint() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{ print $1 }'
+  else
+    shasum -a 256 "$1" | awk '{ print $1 }'
+  fi
+}
+
+resolve_context() {
+  MISSION_PATH="$ORBIT_HOME/missions/$MISSION_SLUG"
+  ORBIT_PATH="$MISSION_PATH/orbits/$ORBIT_ID"
+  ORDERS_PATH="$ORBIT_PATH/crew-orders"
+  RETURNS_PATH="$ORBIT_PATH/crew-returns"
+
+  [ -d "$MISSION_PATH" ] || { echo "error: unknown Mission: $MISSION_SLUG" >&2; exit 1; }
+  [ -d "$ORBIT_PATH" ] || { echo "error: unknown Orbit: $ORBIT_ID" >&2; exit 1; }
+  [ -d "$ORDERS_PATH" ] || { echo "error: missing Crew Orders directory: $ORDERS_PATH" >&2; exit 1; }
+
+  case "$ORDER_ARG" in
+    /*) ORDER_PATH=$ORDER_ARG ;;
+    *) ORDER_PATH="$ORDERS_PATH/$ORDER_ARG" ;;
+  esac
+  [ -f "$ORDER_PATH" ] || { echo "error: Crew Order not found: $ORDER_PATH" >&2; exit 1; }
+  [ ! -L "$ORDER_PATH" ] || { echo "error: Crew Order may not be a symbolic link: $ORDER_PATH" >&2; exit 1; }
+  ORDER_PATH="$(cd "$(dirname "$ORDER_PATH")" && pwd -P)/$(basename "$ORDER_PATH")"
+  ORDERS_PATH="$(cd "$ORDERS_PATH" && pwd -P)"
+  case "$ORDER_PATH" in
+    "$ORDERS_PATH"/*) ;;
+    *) echo "error: Crew Order must be inside $ORDERS_PATH" >&2; exit 1 ;;
+  esac
+
+  ORDER_ID=$(order_field "Crew Order ID" "Order ID" || true)
+  ORDER_MISSION_ID=$(order_field "Mission ID" "Mission" || true)
+  ORDER_ORBIT_ID=$(order_field "Orbit ID" "Orbit date" || true)
+  ROLE=$(order_field "Role" || true)
+  ORDER_STATUS=$(order_field "Task status" "Status" || true)
+  ORDER_TYPE=$(order_field "Order type" "Work type" || true)
+  OBJECTIVE=$(order_section "Objective" || true)
+  ALLOWED_SOURCES=$(order_section "Allowed sources" "Allowed inputs" || true)
+  PROHIBITED_ACTIONS=$(order_section "Prohibited actions" "Explicitly disallowed" || true)
+  DEPENDENCIES=$(order_section "Dependencies" || true)
+  EXPECTED_RETURN=$(order_section "Expected return contract" "Required output" || true)
+  AUTHORITY_BOUNDARY=$(order_section "Authority boundary" || true)
+
+  # Sequential execution keeps the v0.3 field aliases above for existing
+  # Missions. Firstmate eligibility is stricter: only the Crew Order v1
+  # spellings below can establish a scout envelope.
+  CANONICAL_ORDER_TYPE=$(canonical_order_field "Order type" || true)
+  CANONICAL_MISSION_ID=$(canonical_order_field "Mission ID" || true)
+  CANONICAL_ORBIT_ID=$(canonical_order_field "Orbit ID" || true)
+  CANONICAL_ROLE=$(canonical_order_field "Role" || true)
+  CANONICAL_TASK_STATUS=$(canonical_order_field "Task status" || true)
+  CANONICAL_OBJECTIVE=$(canonical_order_section "Objective" || true)
+  CANONICAL_ALLOWED_SOURCES=$(canonical_order_section "Allowed sources" || true)
+  CANONICAL_PROHIBITED_ACTIONS=$(canonical_order_section "Prohibited actions" || true)
+  CANONICAL_DEPENDENCIES=$(canonical_order_section "Dependencies" || true)
+  CANONICAL_EXPECTED_RETURN=$(canonical_order_section "Expected return contract" || true)
+  CANONICAL_AUTHORITY_BOUNDARY=$(canonical_order_section "Authority boundary" || true)
+
+  [ -n "$ORDER_ID" ] || { echo "error: Crew Order is missing Crew Order ID" >&2; exit 1; }
+  [ -n "$ORDER_MISSION_ID" ] || { echo "error: Crew Order is missing Mission ID" >&2; exit 1; }
+  [ -n "$ORDER_ORBIT_ID" ] || { echo "error: Crew Order is missing Orbit ID" >&2; exit 1; }
+  [ -n "$ROLE" ] || { echo "error: Crew Order is missing role" >&2; exit 1; }
+  [ "$ORDER_MISSION_ID" = "$MISSION_SLUG" ] || {
+    echo "error: Crew Order Mission ID '$ORDER_MISSION_ID' does not match '$MISSION_SLUG'" >&2
+    exit 1
+  }
+  [ "$ORDER_ORBIT_ID" = "$ORBIT_ID" ] || {
+    echo "error: Crew Order Orbit ID '$ORDER_ORBIT_ID' does not match '$ORBIT_ID'" >&2
+    exit 1
+  }
+  case "$(basename "$ORDER_PATH")" in
+    "$ORDER_ID"|"$ORDER_ID"-*|"$ORDER_ID.md"|"$ORDER_ID"-*.md) ;;
+    *) echo "error: Crew Order filename does not preserve Order ID '$ORDER_ID'" >&2; exit 1 ;;
+  esac
+
+  ORDER_BASENAME=$(basename "$ORDER_PATH")
+  RETURN_PATH="$RETURNS_PATH/$ORDER_BASENAME"
+  CREW_ORDER_SHA256=$(fingerprint "$ORDER_PATH")
+}
+
+validate_firstmate_scout_order() {
+  local normalized_type normalized_role
+  normalized_type=$(printf '%s' "$CANONICAL_ORDER_TYPE" | tr '[:lower:]-/' '[:upper:]__' | tr -d '[:space:]')
+  [ "$normalized_type" = "READ_ONLY_SCOUT" ] || {
+    echo "error: Firstmate adapter accepts only Order type READ_ONLY_SCOUT; canonical v1 field is required" >&2
+    exit 1
+  }
+  [ -n "$CANONICAL_MISSION_ID" ] || { echo "error: Firstmate scout order is missing canonical Mission ID" >&2; exit 1; }
+  [ -n "$CANONICAL_ORBIT_ID" ] || { echo "error: Firstmate scout order is missing canonical Orbit ID" >&2; exit 1; }
+  [ -n "$CANONICAL_ROLE" ] || { echo "error: Firstmate scout order is missing canonical Role" >&2; exit 1; }
+  [ -n "$CANONICAL_TASK_STATUS" ] || { echo "error: Firstmate scout order is missing canonical Task status" >&2; exit 1; }
+  [ -n "$CANONICAL_OBJECTIVE" ] || { echo "error: Firstmate scout order is missing canonical Objective" >&2; exit 1; }
+  [ -n "$CANONICAL_ALLOWED_SOURCES" ] || { echo "error: Firstmate scout order is missing canonical Allowed sources" >&2; exit 1; }
+  [ -n "$CANONICAL_PROHIBITED_ACTIONS" ] || { echo "error: Firstmate scout order is missing canonical Prohibited actions" >&2; exit 1; }
+  [ -n "$CANONICAL_DEPENDENCIES" ] || { echo "error: Firstmate scout order is missing canonical Dependencies (use None when independent)" >&2; exit 1; }
+  [ -n "$CANONICAL_EXPECTED_RETURN" ] || { echo "error: Firstmate scout order is missing canonical Expected return contract" >&2; exit 1; }
+  [ -n "$CANONICAL_AUTHORITY_BOUNDARY" ] || { echo "error: Firstmate scout order is missing canonical Authority boundary" >&2; exit 1; }
+
+  # Use only canonical v1 values in the Firstmate envelope. The aliases in
+  # resolve_context remain available to the sequential compatibility path.
+  ORDER_TYPE=$CANONICAL_ORDER_TYPE
+  ORDER_MISSION_ID=$CANONICAL_MISSION_ID
+  ORDER_ORBIT_ID=$CANONICAL_ORBIT_ID
+  ROLE=$CANONICAL_ROLE
+  ORDER_STATUS=$CANONICAL_TASK_STATUS
+  OBJECTIVE=$CANONICAL_OBJECTIVE
+  ALLOWED_SOURCES=$CANONICAL_ALLOWED_SOURCES
+  PROHIBITED_ACTIONS=$CANONICAL_PROHIBITED_ACTIONS
+  DEPENDENCIES=$CANONICAL_DEPENDENCIES
+  EXPECTED_RETURN=$CANONICAL_EXPECTED_RETURN
+  AUTHORITY_BOUNDARY=$CANONICAL_AUTHORITY_BOUNDARY
+
+  [ "$ORDER_MISSION_ID" = "$MISSION_SLUG" ] || {
+    echo "error: canonical Crew Order Mission ID '$ORDER_MISSION_ID' does not match '$MISSION_SLUG'" >&2
+    exit 1
+  }
+  [ "$ORDER_ORBIT_ID" = "$ORBIT_ID" ] || {
+    echo "error: canonical Crew Order Orbit ID '$ORDER_ORBIT_ID' does not match '$ORBIT_ID'" >&2
+    exit 1
+  }
+
+  printf '%s\n' "$PROHIBITED_ACTIONS" | grep -Eqi 'modif.*project|project files.*modif|scratch commit' || {
+    echo "error: Prohibited actions must explicitly keep project files read-only" >&2
+    exit 1
+  }
+  printf '%s\n' "$PROHIBITED_ACTIONS" | grep -Eqi 'implement|ship' || {
+    echo "error: Prohibited actions must explicitly forbid implementation/ship work" >&2
+    exit 1
+  }
+  printf '%s\n' "$PROHIBITED_ACTIONS" | grep -Eqi 'dispatch|external write' || {
+    echo "error: Prohibited actions must explicitly forbid Dispatch/external writes" >&2
+    exit 1
+  }
+  printf '%s\n' "$PROHIBITED_ACTIONS" | grep -Eqi 'mission state.*promot|promot.*mission state' || {
+    echo "error: Prohibited actions must explicitly forbid Mission State promotion" >&2
+    exit 1
+  }
+
+  normalized_role=$(printf '%s' "$ROLE" | tr '[:upper:] -' '[:lower:]__')
+  case "$normalized_role" in
+    flight_planner|dispatch_agent)
+      echo "error: Firstmate scout adapter does not execute post-GO, implementation, or Dispatch roles" >&2
+      exit 1
+      ;;
+  esac
+}
+
+resolve_firstmate() {
+  FIRSTMATE_ROOT="${ORBIT_FIRSTMATE_ROOT:-$HOME/code/firstmate}"
+  FIRSTMATE_HOME="${ORBIT_FIRSTMATE_HOME:-$FIRSTMATE_ROOT}"
+  FIRSTMATE_PROJECT="${ORBIT_FIRSTMATE_PROJECT:-$ROOT}"
+  BRIEF_SCRIPT="$FIRSTMATE_ROOT/bin/fm-brief.sh"
+  SPAWN_SCRIPT="$FIRSTMATE_ROOT/bin/fm-spawn.sh"
+  CREW_STATE_SCRIPT="$FIRSTMATE_ROOT/bin/fm-crew-state.sh"
+  [ -x "$BRIEF_SCRIPT" ] || { echo "error: Firstmate brief script not executable: $BRIEF_SCRIPT" >&2; exit 1; }
+  [ -x "$SPAWN_SCRIPT" ] || { echo "error: Firstmate spawn script not executable: $SPAWN_SCRIPT" >&2; exit 1; }
+  [ -x "$CREW_STATE_SCRIPT" ] || { echo "error: Firstmate task-state script not executable: $CREW_STATE_SCRIPT" >&2; exit 1; }
+  [ -d "$FIRSTMATE_PROJECT" ] || { echo "error: Firstmate project is not a directory: $FIRSTMATE_PROJECT" >&2; exit 1; }
+
+  FIRSTMATE_TASK_ID_DEFAULT=$(slugify_task_id "orb-$ORDER_MISSION_ID-${ORDER_ORBIT_ID//-/}-$ORDER_ID")
+  if [ -n "$TASK_ID_OVERRIDE" ]; then
+    FIRSTMATE_TASK_ID_REQUESTED=$TASK_ID_OVERRIDE
+  else
+    FIRSTMATE_TASK_ID_REQUESTED=$FIRSTMATE_TASK_ID_DEFAULT
+  fi
+  safe_task_id "$FIRSTMATE_TASK_ID_REQUESTED" || {
+    echo "error: derived Firstmate task ID is unsafe or exceeds 64 characters; provide an explicit task ID" >&2
+    exit 1
+  }
+  FIRSTMATE_STATE_DIR="$FIRSTMATE_HOME/state"
+  FIRSTMATE_BINDING_DIR="$ORBIT_PATH/runtime/firstmate"
+  set_firstmate_task_id "$FIRSTMATE_TASK_ID_REQUESTED"
+}
+
+set_firstmate_task_id() {
+  FIRSTMATE_TASK_ID=$1
+  safe_task_id "$FIRSTMATE_TASK_ID" || {
+    echo 'error: Firstmate binding contains an unsafe task ID' >&2
+    exit 1
+  }
+  FIRSTMATE_TASK_DATA_DIR="$FIRSTMATE_HOME/data/$FIRSTMATE_TASK_ID"
+  FIRSTMATE_BRIEF_PATH="$FIRSTMATE_TASK_DATA_DIR/brief.md"
+  FIRSTMATE_REPORT_PATH="$FIRSTMATE_TASK_DATA_DIR/report.md"
+  FIRSTMATE_META_PATH="$FIRSTMATE_STATE_DIR/$FIRSTMATE_TASK_ID.meta"
+  FIRSTMATE_BINDING_PATH="$FIRSTMATE_BINDING_DIR/$FIRSTMATE_TASK_ID.binding"
+}
+
+safe_provenance_token() {
+  local token=$1
+  [ -n "$token" ] && [ "${#token}" -le 128 ] || return 1
+  case "$token" in *[!A-Za-z0-9._-]*) return 1 ;; esac
+}
+
+firstmate_state_artifacts_exist_for() {
+  local task_id=$1
+  [ -d "$FIRSTMATE_STATE_DIR" ] || return 1
+  find "$FIRSTMATE_STATE_DIR" -maxdepth 1 \
+    \( -name "$task_id" -o -name "$task_id.*" \) \
+    -print -quit 2>/dev/null | grep -q .
+}
+
+firstmate_state_artifacts_exist() {
+  firstmate_state_artifacts_exist_for "$FIRSTMATE_TASK_ID"
+}
+
+firstmate_task_state_name() {
+  local task_id=$1 state_output state_name
+  state_output=$(FM_HOME="$FIRSTMATE_HOME" "$CREW_STATE_SCRIPT" "$task_id" 2>&1) || return 1
+  state_name=$(printf '%s\n' "$state_output" | awk '
+    tolower($1) == "state:" { print tolower($2); exit }
+  ' | tr '-' '_')
+  case "$state_name" in
+    done|completed|failed|cancelled|canceled|stopped|expired|abandoned|skipped|terminated|timeout|timed_out)
+      printf '%s\n' "$state_name"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+binding_file_field() {
+  local path=$1 key=$2
+  [ -f "$path" ] && [ ! -L "$path" ] || return 1
+  awk -F= -v wanted="$key" '
+    $1 == wanted { count++; value = substr($0, length($1) + 2) }
+    END {
+      if (count == 1) print value
+      else exit 1
+    }
+  ' "$path"
+}
+
+binding_file_well_formed() {
+  local path=$1
+  [ -f "$path" ] && [ ! -L "$path" ] || return 1
+  awk '
+    BEGIN { valid = 1 }
+    /^[[:space:]]*$/ { next }
+    $0 !~ /^[A-Za-z_][A-Za-z0-9_]*=[^[:cntrl:]]*$/ { valid = 0; next }
+    {
+      key = $0
+      sub(/=.*/, "", key)
+      if (++seen[key] > 1) valid = 0
+    }
+    END { exit(valid ? 0 : 1) }
+  ' "$path"
+}
+
+binding_hash_is_valid() {
+  printf '%s\n' "$1" | grep -Eq '^[0-9a-f]{64}$'
+}
+
+binding_is_authoritative() {
+  local path=$1 key value filename task_id
+  binding_file_well_formed "$path" || return 1
+  for key in version status crew_order_id mission_id orbit_id role runtime order_type \
+    orbit_submission_id firstmate_task_id report_path crew_order_sha256 envelope_sha256 \
+    brief_sha256 report_absent_at_submit firstmate_endpoint_task_id firstmate_kind firstmate_busy_gen; do
+    value=$(binding_file_field "$path" "$key" || true)
+    [ -n "$value" ] || return 1
+  done
+  [ "$(binding_file_field "$path" version)" = 2 ] || return 1
+  [ "$(binding_file_field "$path" crew_order_id)" = "$ORDER_ID" ] || return 1
+  [ "$(binding_file_field "$path" mission_id)" = "$ORDER_MISSION_ID" ] || return 1
+  [ "$(binding_file_field "$path" orbit_id)" = "$ORDER_ORBIT_ID" ] || return 1
+  [ "$(binding_file_field "$path" role)" = "$ROLE" ] || return 1
+  [ "$(binding_file_field "$path" runtime)" = firstmate ] || return 1
+  [ "$(binding_file_field "$path" order_type)" = READ_ONLY_SCOUT ] || return 1
+  task_id=$(binding_file_field "$path" firstmate_task_id)
+  safe_task_id "$task_id" || return 1
+  filename=${path##*/}
+  filename=${filename%.binding}
+  [ "$filename" = "$task_id" ] || return 1
+  [ "$(binding_file_field "$path" report_path)" = "$FIRSTMATE_HOME/data/$task_id/report.md" ] || return 1
+  safe_provenance_token "$(binding_file_field "$path" orbit_submission_id)" || return 1
+  binding_hash_is_valid "$(binding_file_field "$path" crew_order_sha256)" || return 1
+  binding_hash_is_valid "$(binding_file_field "$path" envelope_sha256)" || return 1
+  binding_hash_is_valid "$(binding_file_field "$path" brief_sha256)" || return 1
+}
+
+binding_is_logical_candidate() {
+  local path=$1 filename order_id mission_id orbit_id
+  filename=${path##*/}
+  filename=${filename%.binding}
+  order_id=$(binding_file_field "$path" crew_order_id || true)
+  mission_id=$(binding_file_field "$path" mission_id || true)
+  orbit_id=$(binding_file_field "$path" orbit_id || true)
+  [ "$filename" = "$FIRSTMATE_TASK_ID_REQUESTED" ] && return 0
+  [ "$order_id" = "$ORDER_ID" ] && return 0
+  [ -z "$order_id" ] && [ "$mission_id" = "$ORDER_MISSION_ID" ] \
+    && [ "$orbit_id" = "$ORDER_ORBIT_ID" ]
+}
+
+firstmate_artifacts_exist_for() {
+  local task_id=$1 data_path="$FIRSTMATE_HOME/data/$1"
+  [ -e "$data_path" ] || [ -L "$data_path" ] || firstmate_state_artifacts_exist_for "$task_id"
+}
+
+firstmate_data_artifacts_match_order() {
+  local brief task_id data_dir
+  [ -d "$FIRSTMATE_HOME/data" ] || return 1
+  while IFS= read -r -d '' brief; do
+    if grep -Fqx -- "- Crew Order ID: $ORDER_ID" "$brief" \
+      && grep -Fqx -- "- Mission ID: $ORDER_MISSION_ID" "$brief" \
+      && grep -Fqx -- "- Orbit ID: $ORDER_ORBIT_ID" "$brief"; then
+      data_dir=$(dirname "$brief")
+      task_id=${data_dir##*/}
+      printf '%s\n' "$task_id"
+    fi
+  done < <(find "$FIRSTMATE_HOME/data" -mindepth 2 -maxdepth 2 -type f -name brief.md -print0 2>/dev/null)
+}
+
+historical_task_id_is_known() {
+  [ -n "${HISTORICAL_TASK_IDS:-}" ] || return 1
+  printf '%s\n' "$HISTORICAL_TASK_IDS" | grep -Fqx -- "$1"
+}
+
+firstmate_task_artifacts_sha256() {
+  local task_id=$1 meta_path status_path hash_tmp task_sha
+  meta_path="$FIRSTMATE_HOME/state/$task_id.meta"
+  status_path="$FIRSTMATE_HOME/state/$task_id.status"
+  [ -f "$meta_path" ] && [ ! -L "$meta_path" ] || return 1
+  [ -f "$status_path" ] && [ ! -L "$status_path" ] || return 1
+  hash_tmp=$(mktemp "$FIRSTMATE_BINDING_DIR/.task-hash.XXXXXXXXXXXX") || return 1
+  {
+    printf '%s\n' '[meta]'
+    cat "$meta_path"
+    printf '%s\n' '[status]'
+    cat "$status_path"
+  } > "$hash_tmp" || {
+    rm -f "$hash_tmp"
+    return 1
+  }
+  task_sha=$(fingerprint "$hash_tmp") || {
+    rm -f "$hash_tmp"
+    return 1
+  }
+  rm -f "$hash_tmp"
+  printf '%s\n' "$task_sha"
+}
+
+preserved_binding_sha256() {
+  local binding_path=$1 original_status=$2 binding_tmp binding_sha
+  binding_tmp=$(mktemp "$FIRSTMATE_BINDING_DIR/.binding-hash.XXXXXXXXXXXX") || return 1
+  awk -v original_status="$original_status" '
+    BEGIN {
+      retirement_fields["retired_from_status"] = 1
+      retirement_fields["retired_at"] = 1
+      retirement_fields["retired_firstmate_state"] = 1
+      retirement_fields["retired_report_sha256"] = 1
+      retirement_fields["retired_binding_sha256"] = 1
+      retirement_fields["retired_task_sha256"] = 1
+      retirement_fields["retired_authority"] = 1
+      retirement_fields["retirement_schema"] = 1
+    }
+    {
+      key = $0
+      sub(/=.*/, "", key)
+      if (key in retirement_fields) next
+      if (key == "status") {
+        print "status=" original_status
+        status_seen = 1
+      } else {
+        print
+      }
+    }
+    END { if (!status_seen) exit 1 }
+  ' "$binding_path" > "$binding_tmp" || {
+    rm -f "$binding_tmp"
+    return 1
+  }
+  binding_sha=$(fingerprint "$binding_tmp") || {
+    rm -f "$binding_tmp"
+    return 1
+  }
+  rm -f "$binding_tmp"
+  printf '%s\n' "$binding_sha"
+}
+
+validate_terminal_firstmate_artifacts() {
+  local binding_path=$1 task_id report_path data_dir brief_path meta_path status_path state_name
+  task_id=$(binding_file_field "$binding_path" firstmate_task_id || true)
+  safe_task_id "$task_id" || return 1
+  data_dir="$FIRSTMATE_HOME/data/$task_id"
+  brief_path="$data_dir/brief.md"
+  report_path=$(binding_file_field "$binding_path" report_path || true)
+  meta_path="$FIRSTMATE_HOME/state/$task_id.meta"
+  status_path="$FIRSTMATE_HOME/state/$task_id.status"
+  [ -d "$data_dir" ] && [ ! -L "$data_dir" ] || return 1
+  [ -f "$brief_path" ] && [ ! -L "$brief_path" ] || return 1
+  [ "$report_path" = "$FIRSTMATE_HOME/data/$task_id/report.md" ] || return 1
+  [ -f "$report_path" ] && [ ! -L "$report_path" ] || return 1
+  [ -f "$meta_path" ] && [ ! -L "$meta_path" ] || return 1
+  [ -f "$status_path" ] && [ ! -L "$status_path" ] || return 1
+
+  state_name=$(firstmate_task_state_name "$task_id") || return 1
+  FIRSTMATE_TERMINAL_STATE=$state_name
+  FIRSTMATE_TERMINAL_REPORT_SHA256=$(fingerprint "$report_path") || return 1
+  FIRSTMATE_TERMINAL_TASK_SHA256=$(firstmate_task_artifacts_sha256 "$task_id") || return 1
+
+  [ "$(awk -F= '$1 == "endpoint_task_id" { print $2; exit }' "$meta_path")" = "$task_id" ] || return 1
+  [ "$(awk -F= '$1 == "kind" { print $2; exit }' "$meta_path")" = "scout" ] || return 1
+  safe_provenance_token "$(binding_file_field "$binding_path" firstmate_busy_gen)" || return 1
+  [ "$(awk -F= '$1 == "busy_gen" { print $2; exit }' "$meta_path")" = "$(binding_file_field "$binding_path" firstmate_busy_gen)" ] || return 1
+}
+
+validate_retired_binding_artifacts() {
+  local binding_path=$1 retired_from_status retired_at retired_state retired_report_sha
+  local retired_binding_sha retired_task_sha reconstructed_binding_sha
+  binding_file_well_formed "$binding_path" || return 1
+  binding_is_authoritative "$binding_path" || return 1
+  [ "$(binding_file_field "$binding_path" status || true)" = RETIRED ] || return 1
+
+  retired_from_status=$(binding_file_field "$binding_path" retired_from_status || true)
+  case "$retired_from_status" in
+    SUBMITTED|COMPLETED|FAILED|BLOCKED|CANCELLED|CANCELED|STOPPED|ABANDONED|TERMINAL) ;;
+    *) return 1 ;;
+  esac
+  retired_at=$(binding_file_field "$binding_path" retired_at || true)
+  printf '%s\n' "$retired_at" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$' || return 1
+  [ "$(binding_file_field "$binding_path" retired_authority || true)" = HUMAN_DIRECTIVE ] || return 1
+  [ "$(binding_file_field "$binding_path" retirement_schema || true)" = orbit-firstmate-binding-retirement.v1 ] || return 1
+
+  validate_terminal_firstmate_artifacts "$binding_path" || return 1
+  retired_state=$(binding_file_field "$binding_path" retired_firstmate_state || true)
+  [ "$retired_state" = "$FIRSTMATE_TERMINAL_STATE" ] || return 1
+  retired_report_sha=$(binding_file_field "$binding_path" retired_report_sha256 || true)
+  binding_hash_is_valid "$retired_report_sha" || return 1
+  [ "$retired_report_sha" = "$FIRSTMATE_TERMINAL_REPORT_SHA256" ] || return 1
+  retired_task_sha=$(binding_file_field "$binding_path" retired_task_sha256 || true)
+  binding_hash_is_valid "$retired_task_sha" || return 1
+  [ "$retired_task_sha" = "$FIRSTMATE_TERMINAL_TASK_SHA256" ] || return 1
+  retired_binding_sha=$(binding_file_field "$binding_path" retired_binding_sha256 || true)
+  binding_hash_is_valid "$retired_binding_sha" || return 1
+  reconstructed_binding_sha=$(preserved_binding_sha256 "$binding_path" "$retired_from_status") || return 1
+  [ "$retired_binding_sha" = "$reconstructed_binding_sha" ] || return 1
+}
+
+check_firstmate_data_artifacts() {
+  local active_task_id=$1 task_id matches
+  matches=$(firstmate_data_artifacts_match_order || true)
+  while IFS= read -r task_id; do
+    [ -n "$task_id" ] || continue
+    if historical_task_id_is_known "$task_id" || [ "$task_id" = "$active_task_id" ]; then
+      continue
+    fi
+    echo "error: pre-existing Firstmate task artifacts for logical Crew Order $ORDER_ID lack its authoritative binding (task $task_id)" >&2
+    exit 1
+  done <<EOF
+$matches
+EOF
+}
+
+discover_firstmate_binding() {
+  local path task_id status raw_status active_count=0 retired_count=0 raw_current_count=0
+  local invalid_path='' provenance_invalid_path='' requested_artifacts active_task_id
+  FIRSTMATE_BINDING_DISCOVERY=NONE
+  FIRSTMATE_BINDING_CANDIDATE_PATH=''
+  HISTORICAL_TASK_IDS=''
+  [ ! -L "$FIRSTMATE_BINDING_DIR" ] || {
+    echo "error: Firstmate binding directory may not be a symbolic link: $FIRSTMATE_BINDING_DIR" >&2
+    exit 1
+  }
+  if [ -e "$FIRSTMATE_BINDING_DIR" ] && [ ! -d "$FIRSTMATE_BINDING_DIR" ]; then
+    echo "error: Firstmate binding directory is not a directory: $FIRSTMATE_BINDING_DIR" >&2
+    exit 1
+  fi
+
+  if [ -d "$FIRSTMATE_BINDING_DIR" ]; then
+    while IFS= read -r -d '' path; do
+      if binding_is_logical_candidate "$path"; then
+        if ! binding_file_well_formed "$path"; then
+          invalid_path=$path
+          continue
+        fi
+        status=$(binding_file_field "$path" status || true)
+        raw_status=$status
+        if [ -n "$raw_status" ] && [ "$raw_status" != RETIRED ]; then
+          raw_current_count=$((raw_current_count + 1))
+        fi
+        if ! binding_is_authoritative "$path"; then
+          provenance_invalid_path=$path
+          continue
+        fi
+        task_id=$(binding_file_field "$path" firstmate_task_id || true)
+        if [ "$status" = RETIRED ]; then
+          retired_count=$((retired_count + 1))
+          if [ -n "$HISTORICAL_TASK_IDS" ]; then
+            HISTORICAL_TASK_IDS+=$'\n'
+          fi
+          HISTORICAL_TASK_IDS+="$task_id"
+          set_firstmate_task_id "$task_id"
+          validate_binding RETIREABLE
+          validate_retired_binding_artifacts "$path" || {
+            echo "error: retired Firstmate binding does not preserve its provenance, binding/report/task hashes, artifacts, or terminal state: $path" >&2
+            exit 1
+          }
+        else
+          active_count=$((active_count + 1))
+          FIRSTMATE_BINDING_CANDIDATE_PATH=$path
+        fi
+      fi
+    done < <(find "$FIRSTMATE_BINDING_DIR" -maxdepth 1 \
+      \( -type f -o -type l \) -name '*.binding' -print0 2>/dev/null | sort -z)
+  fi
+
+  [ -z "$invalid_path" ] || {
+    echo "error: malformed Firstmate binding for logical Crew Order $ORDER_ID: $invalid_path" >&2
+    exit 1
+  }
+  if [ "$raw_current_count" -gt 1 ]; then
+    echo "error: multiple Firstmate bindings are current/ambiguous for logical Crew Order $ORDER_ID; refusing duplicate prepare/submit" >&2
+    exit 1
+  fi
+  [ -z "$provenance_invalid_path" ] || {
+    echo "error: Firstmate binding has mismatched or incomplete provenance for logical Crew Order $ORDER_ID: $provenance_invalid_path" >&2
+    exit 1
+  }
+  if [ "$active_count" -gt 1 ]; then
+    echo "error: multiple Firstmate bindings are current/ambiguous for logical Crew Order $ORDER_ID; refusing duplicate prepare/submit" >&2
+    exit 1
+  fi
+
+  if [ "$active_count" = 1 ]; then
+    active_task_id=$(binding_file_field "$FIRSTMATE_BINDING_CANDIDATE_PATH" firstmate_task_id)
+    set_firstmate_task_id "$active_task_id"
+    FIRSTMATE_BINDING_DISCOVERY=ONE
+    if [ "$FIRSTMATE_TASK_ID_REQUESTED" != "$FIRSTMATE_TASK_ID" ] \
+      && firstmate_artifacts_exist_for "$FIRSTMATE_TASK_ID_REQUESTED" \
+      && ! historical_task_id_is_known "$FIRSTMATE_TASK_ID_REQUESTED"; then
+      echo "error: pre-existing Firstmate task artifacts exist for requested task $FIRSTMATE_TASK_ID_REQUESTED without the authoritative binding for logical Crew Order $ORDER_ID" >&2
+      exit 1
+    fi
+    check_firstmate_data_artifacts "$active_task_id"
+    return 0
+  fi
+
+  if [ "$retired_count" -gt 0 ]; then
+    FIRSTMATE_BINDING_DISCOVERY=RETIRED
+    set_firstmate_task_id "$FIRSTMATE_TASK_ID_REQUESTED"
+    for task_id in "$FIRSTMATE_TASK_ID_REQUESTED" "$FIRSTMATE_TASK_ID_DEFAULT"; do
+      [ -n "$task_id" ] || continue
+      if firstmate_artifacts_exist_for "$task_id" \
+        && ! historical_task_id_is_known "$task_id"; then
+        echo "error: pre-existing Firstmate task artifacts exist for requested task $task_id without its preserved retired binding for logical Crew Order $ORDER_ID" >&2
+        exit 1
+      fi
+    done
+    check_firstmate_data_artifacts ''
+    return 0
+  fi
+
+  set_firstmate_task_id "$FIRSTMATE_TASK_ID_REQUESTED"
+  for task_id in "$FIRSTMATE_TASK_ID_REQUESTED" "$FIRSTMATE_TASK_ID_DEFAULT"; do
+    [ -n "$task_id" ] || continue
+    if firstmate_artifacts_exist_for "$task_id"; then
+      echo "error: pre-existing Firstmate task artifacts exist for logical Crew Order $ORDER_ID without an authoritative binding (task $task_id)" >&2
+      exit 1
+    fi
+  done
+  requested_artifacts=$(firstmate_data_artifacts_match_order || true)
+  [ -z "$requested_artifacts" ] || {
+    task_id=$(printf '%s\n' "$requested_artifacts" | sed -n '1p')
+    echo "error: pre-existing Firstmate task artifacts exist for logical Crew Order $ORDER_ID without an authoritative binding (task $task_id)" >&2
+    exit 1
+  }
+}
+
+new_submission_id() {
+  local reservation suffix
+  [ ! -L "$FIRSTMATE_BINDING_DIR" ] || {
+    echo "error: Firstmate binding directory may not be a symbolic link: $FIRSTMATE_BINDING_DIR" >&2
+    exit 1
+  }
+  mkdir -p "$FIRSTMATE_BINDING_DIR"
+  umask 077
+  reservation=$(mktemp "$FIRSTMATE_BINDING_DIR/.submission.XXXXXXXXXXXX")
+  suffix=${reservation##*.submission.}
+  rm -f "$reservation"
+  ORBIT_SUBMISSION_ID="orbsub-$suffix"
+  safe_provenance_token "$ORBIT_SUBMISSION_ID" || {
+    echo 'error: could not create a safe ORBIT submission identity' >&2
+    exit 1
+  }
+}
+
+binding_field() {
+  local key=$1 count
+  [ -f "$FIRSTMATE_BINDING_PATH" ] && [ ! -L "$FIRSTMATE_BINDING_PATH" ] || return 1
+  count=$(grep -c "^${key}=" "$FIRSTMATE_BINDING_PATH" 2>/dev/null || true)
+  [ "$count" = 1 ] || return 1
+  awk -F= -v wanted="$key" '$1 == wanted { sub(/^[^=]*=/, ""); print; exit }' "$FIRSTMATE_BINDING_PATH"
+}
+
+binding_matches() {
+  local actual
+  actual=$(binding_field "$1") || return 1
+  [ "$actual" = "$2" ]
+}
+
+write_binding() {
+  local status=$1 binding_tmp
+  [ ! -L "$FIRSTMATE_BINDING_DIR" ] || {
+    echo "error: Firstmate binding directory may not be a symbolic link: $FIRSTMATE_BINDING_DIR" >&2
+    exit 1
+  }
+  mkdir -p "$FIRSTMATE_BINDING_DIR"
+  [ ! -L "$FIRSTMATE_BINDING_PATH" ] || {
+    echo "error: Firstmate binding may not be a symbolic link: $FIRSTMATE_BINDING_PATH" >&2
+    exit 1
+  }
+  umask 077
+  binding_tmp=$(mktemp "$FIRSTMATE_BINDING_DIR/.binding.XXXXXXXXXXXX")
+  {
+    printf 'version=2\n'
+    printf 'status=%s\n' "$status"
+    printf 'crew_order_id=%s\n' "$ORDER_ID"
+    printf 'mission_id=%s\n' "$ORDER_MISSION_ID"
+    printf 'orbit_id=%s\n' "$ORDER_ORBIT_ID"
+    printf 'role=%s\n' "$ROLE"
+    printf 'runtime=firstmate\n'
+    printf 'order_type=READ_ONLY_SCOUT\n'
+    printf 'orbit_submission_id=%s\n' "$ORBIT_SUBMISSION_ID"
+    printf 'firstmate_task_id=%s\n' "$FIRSTMATE_TASK_ID"
+    printf 'report_path=%s\n' "$FIRSTMATE_REPORT_PATH"
+    printf 'crew_order_sha256=%s\n' "$CREW_ORDER_SHA256"
+    printf 'envelope_sha256=%s\n' "$RUNTIME_ENVELOPE_SHA256"
+    printf 'brief_sha256=%s\n' "$FIRSTMATE_BRIEF_SHA256"
+    printf 'report_absent_at_submit=%s\n' "$REPORT_ABSENT_AT_SUBMIT"
+    printf 'firstmate_endpoint_task_id=%s\n' "$FIRSTMATE_ENDPOINT_TASK_ID"
+    printf 'firstmate_kind=%s\n' "$FIRSTMATE_KIND"
+    printf 'firstmate_busy_gen=%s\n' "$FIRSTMATE_BUSY_GEN"
+  } > "$binding_tmp"
+  mv "$binding_tmp" "$FIRSTMATE_BINDING_PATH"
+}
+
+validate_binding() {
+  local expected_status envelope_tmp bound_order_sha binding binding_filename status_binding
+  expected_status=$1
+  [ -f "$FIRSTMATE_BINDING_PATH" ] || {
+    echo "error: missing Firstmate submission binding; run \`runtime firstmate prepare\` first" >&2
+    exit 1
+  }
+  [ ! -L "$FIRSTMATE_BINDING_PATH" ] || {
+    echo "error: Firstmate binding may not be a symbolic link: $FIRSTMATE_BINDING_PATH" >&2
+    exit 1
+  }
+  binding_filename=${FIRSTMATE_BINDING_PATH##*/}
+  binding_filename=${binding_filename%.binding}
+  [ "$binding_filename" = "$FIRSTMATE_TASK_ID" ] || {
+    echo 'error: Firstmate binding filename does not match its task provenance' >&2
+    exit 1
+  }
+  ORBIT_SUBMISSION_ID=$(binding_field orbit_submission_id || true)
+  safe_provenance_token "$ORBIT_SUBMISSION_ID" || {
+    echo 'error: Firstmate submission binding has an invalid ORBIT submission identity' >&2
+    exit 1
+  }
+  if [ "$expected_status" = RETIREABLE ]; then
+    status_binding=''
+    case "$(binding_field status || true)" in
+      SUBMITTED|COMPLETED|FAILED|BLOCKED|CANCELLED|CANCELED|STOPPED|ABANDONED|TERMINAL|RETIRED) ;;
+      *)
+        echo 'error: Firstmate binding is not an eligible historical execution for retirement' >&2
+        exit 1
+        ;;
+    esac
+  else
+    status_binding="status|$expected_status"
+  fi
+  for binding in \
+    "version|2" \
+    "$status_binding" \
+    "crew_order_id|$ORDER_ID" \
+    "mission_id|$ORDER_MISSION_ID" \
+    "orbit_id|$ORDER_ORBIT_ID" \
+    "role|$ROLE" \
+    "runtime|firstmate" \
+    "order_type|READ_ONLY_SCOUT" \
+    "firstmate_task_id|$FIRSTMATE_TASK_ID" \
+    "report_path|$FIRSTMATE_REPORT_PATH"; do
+    [ -n "$binding" ] || continue
+    binding_matches "${binding%%|*}" "${binding#*|}" || {
+      echo 'error: Firstmate submission binding does not match this immutable Crew Order and task' >&2
+      exit 1
+    }
+  done
+
+  bound_order_sha=$(binding_field crew_order_sha256 || true)
+  [ "$bound_order_sha" = "$CREW_ORDER_SHA256" ] || {
+    if [ "$expected_status" = SUBMITTED ]; then
+      echo 'error: Crew Order changed after Firstmate submission; create a new task' >&2
+    else
+      echo 'error: Crew Order changed after Firstmate preparation; prepare a new task' >&2
+    fi
+    exit 1
+  }
+
+  umask 077
+  envelope_tmp=$(mktemp "$FIRSTMATE_BINDING_DIR/.envelope.XXXXXXXXXXXX")
+  render_runtime_envelope > "$envelope_tmp"
+  RUNTIME_ENVELOPE_SHA256=$(fingerprint "$envelope_tmp")
+  rm -f "$envelope_tmp"
+  binding_matches envelope_sha256 "$RUNTIME_ENVELOPE_SHA256" || {
+    echo 'error: generated Firstmate instructions no longer match the bound Crew Order' >&2
+    exit 1
+  }
+  [ -f "$FIRSTMATE_BRIEF_PATH" ] && [ ! -L "$FIRSTMATE_BRIEF_PATH" ] || {
+    echo 'error: prepared Firstmate brief is missing or not a regular file' >&2
+    exit 1
+  }
+  FIRSTMATE_BRIEF_SHA256=$(fingerprint "$FIRSTMATE_BRIEF_PATH")
+  binding_matches brief_sha256 "$FIRSTMATE_BRIEF_SHA256" || {
+    echo 'error: prepared Firstmate brief changed after ORBIT sealed it' >&2
+    exit 1
+  }
+
+  if [ "$expected_status" = PREPARED ]; then
+    binding_matches report_absent_at_submit NOT_VERIFIED \
+      && binding_matches firstmate_endpoint_task_id NOT_RECORDED \
+      && binding_matches firstmate_kind NOT_RECORDED \
+      && binding_matches firstmate_busy_gen NOT_RECORDED || {
+        echo 'error: prepared Firstmate submission binding contains unexpected task provenance' >&2
+        exit 1
+      }
+  else
+    REPORT_ABSENT_AT_SUBMIT=$(binding_field report_absent_at_submit || true)
+    FIRSTMATE_ENDPOINT_TASK_ID=$(binding_field firstmate_endpoint_task_id || true)
+    FIRSTMATE_KIND=$(binding_field firstmate_kind || true)
+    FIRSTMATE_BUSY_GEN=$(binding_field firstmate_busy_gen || true)
+    [ "$REPORT_ABSENT_AT_SUBMIT" = 1 ] \
+      && [ "$FIRSTMATE_ENDPOINT_TASK_ID" = "$FIRSTMATE_TASK_ID" ] \
+      && [ "$FIRSTMATE_KIND" = scout ] \
+      && safe_provenance_token "$FIRSTMATE_BUSY_GEN" || {
+        echo 'error: submitted Firstmate binding lacks valid task-generation provenance' >&2
+        exit 1
+      }
+    validate_current_firstmate_generation
+  fi
+}
+
+print_mapping() {
+  local task_status=$1
+  printf 'ORBIT RUNTIME TASK\n'
+  printf 'Crew Order ID: %s\nMission ID: %s\nOrbit ID: %s\nRole: %s\nRuntime: %s\nTask status: %s\n' \
+    "$ORDER_ID" "$ORDER_MISSION_ID" "$ORDER_ORBIT_ID" "$ROLE" "$ADAPTER" "$task_status"
+  if [ "$ADAPTER" = firstmate ]; then
+    printf 'ORBIT submission ID: %s\nFirstmate task ID: %s\nFirstmate report path: %s\n' \
+      "$ORBIT_SUBMISSION_ID" "$FIRSTMATE_TASK_ID" "$FIRSTMATE_REPORT_PATH"
+  else
+    printf 'Runtime task ID: NOT_APPLICABLE\nRuntime report path: %s\n' "$RETURN_PATH"
+  fi
+  printf 'Crew Order source: %s\n' "$ORDER_PATH"
+}
+
+render_runtime_envelope() {
+  cat <<EOF
+Execute this ORBIT Crew Order as a READ-ONLY/SCOUT task. The ORBIT order is the immutable intent record; Firstmate execution metadata is provenance only.
+
+## ORBIT identity and runtime mapping
+
+- Crew Order ID: $ORDER_ID
+- Mission ID: $ORDER_MISSION_ID
+- Orbit ID: $ORDER_ORBIT_ID
+- Role: $ROLE
+- Order type: $ORDER_TYPE
+- ORBIT order status: ${ORDER_STATUS:-NOT_REPORTED}
+- Runtime: firstmate
+- Task status at handoff: PREPARED
+- ORBIT submission ID: $ORBIT_SUBMISSION_ID
+- Firstmate task ID: $FIRSTMATE_TASK_ID
+- Firstmate report path: $FIRSTMATE_REPORT_PATH
+- Crew Order source: $ORDER_PATH
+- Crew Order SHA-256: $CREW_ORDER_SHA256
+
+## Objective
+
+$OBJECTIVE
+
+## Allowed sources
+
+$ALLOWED_SOURCES
+
+Do not read or substitute sources outside this list. If a required source is unavailable, report MISSING_EVIDENCE and stop only the source-dependent conclusions.
+
+## Prohibited actions
+
+$PROHIBITED_ACTIONS
+
+## Dependencies
+
+${DEPENDENCIES:-None.}
+
+## Expected ORBIT Crew Return contract
+
+$EXPECTED_RETURN
+
+## Authority and completion boundary
+
+Return role-attributed findings to the Firstmate scout report path. Findings and recommendations do not create or broaden GO, authorize implementation, authorize Dispatch, reconcile Crew Returns, or promote Mission State. Do not edit ORBIT Gate Control, reconciliation, Dispatch, or Mission State artifacts. Mission Control performs reconciliation and Gate Control after ORBIT captures the report.
+EOF
+}
+
+ensure_fresh_firstmate_attempt() {
+  [ ! -e "$FIRSTMATE_BINDING_PATH" ] && [ ! -L "$FIRSTMATE_BINDING_PATH" ] || {
+    echo "error: Firstmate submission binding already exists for task $FIRSTMATE_TASK_ID; use a distinct task ID" >&2
+    exit 1
+  }
+  [ ! -e "$FIRSTMATE_TASK_DATA_DIR" ] && [ ! -L "$FIRSTMATE_TASK_DATA_DIR" ] || {
+    echo "error: pre-existing Firstmate task artifacts found for $FIRSTMATE_TASK_ID; use a distinct task ID" >&2
+    exit 1
+  }
+  if firstmate_state_artifacts_exist; then
+    echo "error: pre-existing Firstmate task artifacts found for $FIRSTMATE_TASK_ID; use a distinct task ID" >&2
+    exit 1
+  fi
+}
+
+ensure_report_absent_at_submit() {
+  [ ! -e "$FIRSTMATE_REPORT_PATH" ] && [ ! -L "$FIRSTMATE_REPORT_PATH" ] || {
+    echo "error: Firstmate report predates the current submission; use a distinct task ID" >&2
+    exit 1
+  }
+  if firstmate_state_artifacts_exist; then
+    echo "error: Firstmate task provenance predates the current submission; use a distinct task ID" >&2
+    exit 1
+  fi
+}
+
+meta_field() {
+  local key=$1 count
+  [ -f "$FIRSTMATE_META_PATH" ] && [ ! -L "$FIRSTMATE_META_PATH" ] || return 1
+  count=$(grep -c "^${key}=" "$FIRSTMATE_META_PATH" 2>/dev/null || true)
+  [ "$count" = 1 ] || return 1
+  awk -F= -v wanted="$key" '$1 == wanted { sub(/^[^=]*=/, ""); print; exit }' "$FIRSTMATE_META_PATH"
+}
+
+capture_firstmate_generation() {
+  [ -f "$FIRSTMATE_META_PATH" ] && [ ! -L "$FIRSTMATE_META_PATH" ] || {
+    echo 'error: successful Firstmate spawn did not produce regular task metadata' >&2
+    return 1
+  }
+  FIRSTMATE_ENDPOINT_TASK_ID=$(meta_field endpoint_task_id || true)
+  FIRSTMATE_KIND=$(meta_field kind || true)
+  FIRSTMATE_BUSY_GEN=$(meta_field busy_gen || true)
+  [ "$FIRSTMATE_ENDPOINT_TASK_ID" = "$FIRSTMATE_TASK_ID" ] || {
+    echo 'error: Firstmate metadata endpoint_task_id does not match the submitted task' >&2
+    return 1
+  }
+  [ "$FIRSTMATE_KIND" = scout ] || {
+    echo 'error: Firstmate task metadata does not identify this task as a scout' >&2
+    return 1
+  }
+  safe_provenance_token "$FIRSTMATE_BUSY_GEN" || {
+    echo 'error: Firstmate task metadata lacks a trustworthy busy_gen launch generation' >&2
+    return 1
+  }
+}
+
+validate_current_firstmate_generation() {
+  local current_endpoint current_kind current_busy_gen
+  current_endpoint=$(meta_field endpoint_task_id || true)
+  current_kind=$(meta_field kind || true)
+  current_busy_gen=$(meta_field busy_gen || true)
+  [ "$current_endpoint" = "$FIRSTMATE_ENDPOINT_TASK_ID" ] \
+    && [ "$current_kind" = "$FIRSTMATE_KIND" ] \
+    && [ "$current_busy_gen" = "$FIRSTMATE_BUSY_GEN" ] || {
+      echo 'error: current Firstmate task generation does not match the submitted provenance binding' >&2
+      exit 1
+    }
+}
+
+select_fresh_firstmate_task_id() {
+  local attempt suffix candidate prefix_limit
+  [ "$FIRSTMATE_BINDING_DISCOVERY" = RETIRED ] || return 0
+  if ! firstmate_artifacts_exist_for "$FIRSTMATE_TASK_ID_REQUESTED"; then
+    return 0
+  fi
+  [ "$(binding_file_field "$FIRSTMATE_BINDING_DIR/$FIRSTMATE_TASK_ID_REQUESTED.binding" status || true)" = RETIRED ] || return 0
+  suffix='-retry-1'
+  attempt=1
+  while :; do
+    suffix="-retry-$attempt"
+    prefix_limit=$((64 - ${#suffix}))
+    [ "$prefix_limit" -gt 0 ] || {
+      echo "error: retired Firstmate task ID $FIRSTMATE_TASK_ID_REQUESTED leaves no room for a fresh task ID; provide an explicit task ID" >&2
+      exit 1
+    }
+    candidate="${FIRSTMATE_TASK_ID_REQUESTED:0:prefix_limit}$suffix"
+    safe_task_id "$candidate" || {
+      echo 'error: could not derive a safe fresh Firstmate task ID from retired history; provide an explicit task ID' >&2
+      exit 1
+    }
+    if ! firstmate_artifacts_exist_for "$candidate" \
+      && [ ! -e "$FIRSTMATE_BINDING_DIR/$candidate.binding" ] \
+      && [ ! -L "$FIRSTMATE_BINDING_DIR/$candidate.binding" ]; then
+      set_firstmate_task_id "$candidate"
+      return 0
+    fi
+    attempt=$((attempt + 1))
+  done
+}
+
+prepare_firstmate() {
+  local envelope brief_tmp line replaced=0
+  select_fresh_firstmate_task_id
+  ensure_fresh_firstmate_attempt
+  new_submission_id
+  REPORT_ABSENT_AT_SUBMIT=NOT_VERIFIED
+  FIRSTMATE_ENDPOINT_TASK_ID=NOT_RECORDED
+  FIRSTMATE_KIND=NOT_RECORDED
+  FIRSTMATE_BUSY_GEN=NOT_RECORDED
+  umask 077
+
+  FM_HOME="$FIRSTMATE_HOME" "$BRIEF_SCRIPT" "$FIRSTMATE_TASK_ID" "$(basename "$FIRSTMATE_PROJECT")" --scout >/dev/null
+  [ -f "$FIRSTMATE_BRIEF_PATH" ] && [ ! -L "$FIRSTMATE_BRIEF_PATH" ] || {
+    echo "error: Firstmate did not create a regular brief: $FIRSTMATE_BRIEF_PATH" >&2
+    exit 1
+  }
+
+  envelope=$(mktemp "$FIRSTMATE_TASK_DATA_DIR/.orbit-envelope.XXXXXXXXXXXX")
+  brief_tmp=$(mktemp "$FIRSTMATE_TASK_DATA_DIR/.orbit-brief.XXXXXXXXXXXX")
+  render_runtime_envelope > "$envelope"
+  while IFS= read -r line || [ -n "$line" ]; do
+    if [ "$line" = "{TASK}" ]; then
+      cat "$envelope" >> "$brief_tmp"
+      replaced=$((replaced + 1))
+    else
+      printf '%s\n' "$line" >> "$brief_tmp"
+    fi
+  done < "$FIRSTMATE_BRIEF_PATH"
+  [ "$replaced" -eq 1 ] || {
+    rm -f "$envelope" "$brief_tmp"
+    echo "error: Firstmate scout scaffold must contain exactly one {TASK} placeholder" >&2
+    exit 1
+  }
+  cat >> "$brief_tmp" <<'EOF'
+
+# ORBIT Phase 2 hard stop
+
+This READ_ONLY_SCOUT order is read-only despite any generic scout-laboratory wording above: do not edit project files or make scratch commits. Write only the Firstmate report and status required by the scout contract. This task is not eligible for promotion to a Firstmate ship task. If the report recommends implementation, return that recommendation to ORBIT as an unauthorized finding. A separate ORBIT order and explicit scoped human GO would be required by a later phase; this adapter provides no implementation or promotion command.
+EOF
+  mv "$brief_tmp" "$FIRSTMATE_BRIEF_PATH"
+  RUNTIME_ENVELOPE_SHA256=$(fingerprint "$envelope")
+  rm -f "$envelope"
+  FIRSTMATE_BRIEF_SHA256=$(fingerprint "$FIRSTMATE_BRIEF_PATH")
+  write_binding PREPARED
+
+  print_mapping PREPARED
+  printf 'Firstmate brief path: %s\nNext: inspect the brief, then run the matching `runtime firstmate submit` command.\n' "$FIRSTMATE_BRIEF_PATH"
+}
+
+submit_firstmate() {
+  local -a spawn_args
+  [ -f "$FIRSTMATE_BRIEF_PATH" ] && [ ! -L "$FIRSTMATE_BRIEF_PATH" ] || {
+    echo "error: missing prepared Firstmate brief; run `runtime firstmate prepare` first" >&2
+    exit 1
+  }
+  validate_binding PREPARED
+  ensure_report_absent_at_submit
+
+  spawn_args=("$FIRSTMATE_TASK_ID" "$FIRSTMATE_PROJECT" --scout)
+  if [ -n "${ORBIT_FIRSTMATE_BACKEND:-}" ]; then
+    spawn_args+=(--backend "$ORBIT_FIRSTMATE_BACKEND")
+  fi
+  FM_HOME="$FIRSTMATE_HOME" "$SPAWN_SCRIPT" "${spawn_args[@]}"
+  REPORT_ABSENT_AT_SUBMIT=1
+  if ! capture_firstmate_generation; then
+    FIRSTMATE_ENDPOINT_TASK_ID=UNVERIFIED
+    FIRSTMATE_KIND=UNVERIFIED
+    FIRSTMATE_BUSY_GEN=UNVERIFIED
+    write_binding SUBMISSION_PROVENANCE_FAILED
+    exit 1
+  fi
+  write_binding SUBMITTED
+  print_mapping SUBMITTED
+  echo 'Firstmate owns supervision, completion handling, queues, backend lifecycle, and recovery for this task.'
+}
+
+preflight_firstmate() {
+  local binding_status firstmate_state
+
+  if [ "$FIRSTMATE_BINDING_DISCOVERY" = RETIRED ]; then
+    printf 'FIRSTMATE PREFLIGHT: READY_TO_PREPARE\nOrder: %s\nHistorical bindings: RETIRED\n' "$ORDER_ID"
+    return 0
+  fi
+
+  if [ ! -e "$FIRSTMATE_BINDING_PATH" ] && [ ! -L "$FIRSTMATE_BINDING_PATH" ]; then
+    ensure_fresh_firstmate_attempt
+    printf 'FIRSTMATE PREFLIGHT: READY_TO_PREPARE\nOrder: %s\n' "$ORDER_ID"
+    return 0
+  fi
+
+  binding_status=$(binding_field status || true)
+  case "$binding_status" in
+    RETIRED)
+      validate_binding RETIREABLE
+      validate_retired_binding_artifacts "$FIRSTMATE_BINDING_PATH" || {
+        echo 'error: retired Firstmate binding does not preserve its report/task artifacts or terminal state' >&2
+        exit 1
+      }
+      printf 'FIRSTMATE PREFLIGHT: READY_TO_PREPARE\nOrder: %s\nHistorical bindings: RETIRED\n' "$ORDER_ID"
+      ;;
+    PREPARED)
+      validate_binding PREPARED
+      ensure_report_absent_at_submit
+      printf 'FIRSTMATE PREFLIGHT: READY_TO_SUBMIT\nOrder: %s\n' "$ORDER_ID"
+      ;;
+    SUBMITTED)
+      validate_binding SUBMITTED
+      firstmate_state=$(FM_HOME="$FIRSTMATE_HOME" "$CREW_STATE_SCRIPT" "$FIRSTMATE_TASK_ID" 2>&1) || {
+        echo 'error: Firstmate task state cannot be read for the submitted provenance binding' >&2
+        exit 1
+      }
+      case "$firstmate_state" in
+        state:\ done\ *)
+          [ -f "$FIRSTMATE_REPORT_PATH" ] && [ ! -L "$FIRSTMATE_REPORT_PATH" ] || {
+            echo 'error: completed Firstmate task is missing a regular scout report for the submitted provenance binding' >&2
+            exit 1
+          }
+          printf 'FIRSTMATE PREFLIGHT: READY_TO_COLLECT\nOrder: %s\n' "$ORDER_ID"
+          ;;
+        *)
+          [ ! -e "$FIRSTMATE_REPORT_PATH" ] && [ ! -L "$FIRSTMATE_REPORT_PATH" ] || {
+            echo 'error: Firstmate scout report exists before the submitted task is complete' >&2
+            exit 1
+          }
+          printf 'FIRSTMATE PREFLIGHT: AWAITING_FIRSTMATE_COMPLETION\nOrder: %s\n' "$ORDER_ID"
+          ;;
+      esac
+      ;;
+    *)
+      echo "error: Firstmate submission binding is stale, incompatible, missing status, or already bound to a non-resumable execution (status: ${binding_status:-MISSING})" >&2
+      exit 1
+      ;;
+  esac
+}
+
+write_retired_binding() {
+  local retired_from_status=$1 retired_at=$2 retired_state=$3 retired_report_sha=$4
+  local retired_binding_sha=$5 retired_task_sha=$6 binding_tmp
+  [ ! -L "$FIRSTMATE_BINDING_DIR" ] || {
+    echo "error: Firstmate binding directory may not be a symbolic link: $FIRSTMATE_BINDING_DIR" >&2
+    exit 1
+  }
+  [ -f "$FIRSTMATE_BINDING_PATH" ] && [ ! -L "$FIRSTMATE_BINDING_PATH" ] || {
+    echo 'error: Firstmate binding disappeared before retirement' >&2
+    exit 1
+  }
+  umask 077
+  binding_tmp=$(mktemp "$FIRSTMATE_BINDING_DIR/.retirement.XXXXXXXXXXXX")
+  awk \
+    -v retired_from_status="$retired_from_status" \
+    -v retired_at="$retired_at" \
+    -v retired_state="$retired_state" \
+    -v retired_report_sha="$retired_report_sha" \
+    -v retired_binding_sha="$retired_binding_sha" \
+    -v retired_task_sha="$retired_task_sha" '
+      BEGIN {
+        values["status"] = "RETIRED"
+        values["retired_from_status"] = retired_from_status
+        values["retired_at"] = retired_at
+        values["retired_firstmate_state"] = retired_state
+        values["retired_report_sha256"] = retired_report_sha
+        values["retired_binding_sha256"] = retired_binding_sha
+        values["retired_task_sha256"] = retired_task_sha
+        values["retired_authority"] = "HUMAN_DIRECTIVE"
+        values["retirement_schema"] = "orbit-firstmate-binding-retirement.v1"
+      }
+      {
+        key = $0
+        sub(/=.*/, "", key)
+        if (key in values) {
+          print key "=" values[key]
+          found[key] = 1
+        } else {
+          print
+        }
+      }
+      END {
+        for (key in values) if (!found[key]) print key "=" values[key]
+      }
+    ' "$FIRSTMATE_BINDING_PATH" > "$binding_tmp"
+  mv "$binding_tmp" "$FIRSTMATE_BINDING_PATH"
+}
+
+retire_firstmate() {
+  local binding_status retired_at binding_sha task_sha
+  set_firstmate_task_id "$TASK_ID_OVERRIDE"
+  [ -f "$FIRSTMATE_BINDING_PATH" ] && [ ! -L "$FIRSTMATE_BINDING_PATH" ] || {
+    echo "error: no existing Firstmate binding for task $FIRSTMATE_TASK_ID" >&2
+    exit 1
+  }
+  binding_is_authoritative "$FIRSTMATE_BINDING_PATH" || {
+    echo "error: Firstmate binding does not match Mission, Orbit, Crew Order ID, and task identity: $FIRSTMATE_BINDING_PATH" >&2
+    exit 1
+  }
+  binding_status=$(binding_file_field "$FIRSTMATE_BINDING_PATH" status || true)
+  validate_binding RETIREABLE
+
+  if [ "$binding_status" = RETIRED ]; then
+    validate_retired_binding_artifacts "$FIRSTMATE_BINDING_PATH" || {
+      echo "error: retired Firstmate binding does not preserve its provenance, binding/report/task hashes, artifacts, or terminal state" >&2
+      exit 1
+    }
+    printf 'ORBIT FIRSTMATE HISTORICAL BINDING\nCrew Order ID: %s\nFirstmate task ID: %s\nBinding status: RETIRED\n' \
+      "$ORDER_ID" "$FIRSTMATE_TASK_ID"
+    echo 'Historical binding, report, task identity, and provenance are already preserved.'
+    echo 'No GO, implementation authorization, Dispatch authorization, or Mission State promotion was created.'
+    return 0
+  fi
+
+  validate_terminal_firstmate_artifacts "$FIRSTMATE_BINDING_PATH" || {
+    echo "error: Firstmate task $FIRSTMATE_TASK_ID must preserve a regular report/task artifact set and a terminal non-active state before retirement" >&2
+    exit 1
+  }
+  binding_sha=$(fingerprint "$FIRSTMATE_BINDING_PATH")
+  task_sha=$FIRSTMATE_TERMINAL_TASK_SHA256
+
+  retired_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+  write_retired_binding "$binding_status" "$retired_at" "$FIRSTMATE_TERMINAL_STATE" \
+    "$FIRSTMATE_TERMINAL_REPORT_SHA256" "$binding_sha" "$task_sha"
+  printf 'ORBIT FIRSTMATE HISTORICAL BINDING\nCrew Order ID: %s\nFirstmate task ID: %s\nBinding status: RETIRED\n' \
+    "$ORDER_ID" "$FIRSTMATE_TASK_ID"
+  echo 'Original binding fields, report, task identity, and provenance were preserved.'
+  echo 'Firstmate task records were not mutated.'
+  echo 'No GO, implementation authorization, Dispatch authorization, or Mission State promotion was created.'
+}
+
+collect_firstmate() {
+  local firstmate_state started_at completed_at return_tmp report_snapshot source_report_sha
+  validate_binding SUBMITTED
+  [ -f "$FIRSTMATE_REPORT_PATH" ] || { echo "error: Firstmate report not found: $FIRSTMATE_REPORT_PATH" >&2; exit 1; }
+  [ ! -L "$FIRSTMATE_REPORT_PATH" ] || { echo "error: Firstmate report may not be a symbolic link: $FIRSTMATE_REPORT_PATH" >&2; exit 1; }
+  firstmate_state=$(FM_HOME="$FIRSTMATE_HOME" "$CREW_STATE_SCRIPT" "$FIRSTMATE_TASK_ID")
+  case "$firstmate_state" in
+    state:\ done\ *) ;;
+    *) echo "error: Firstmate task is not complete ($firstmate_state)" >&2; exit 1 ;;
+  esac
+  validate_current_firstmate_generation
+
+  started_at=$(meta_field started_at || meta_field started || true)
+  completed_at=$(meta_field completed_at || meta_field completed || true)
+  [ -n "$started_at" ] || started_at=NOT_REPORTED
+  [ -n "$completed_at" ] || completed_at=NOT_REPORTED
+
+  mkdir -p "$RETURNS_PATH"
+  [ ! -e "$RETURN_PATH" ] && [ ! -L "$RETURN_PATH" ] || { echo "error: Crew Return already exists: $RETURN_PATH" >&2; exit 1; }
+  umask 077
+  report_snapshot=$(mktemp "$RETURNS_PATH/.report-snapshot.XXXXXXXXXXXX")
+  cp "$FIRSTMATE_REPORT_PATH" "$report_snapshot"
+  FIRSTMATE_REPORT_SHA256=$(fingerprint "$report_snapshot")
+  source_report_sha=$(fingerprint "$FIRSTMATE_REPORT_PATH")
+  [ "$source_report_sha" = "$FIRSTMATE_REPORT_SHA256" ] || {
+    rm -f "$report_snapshot"
+    echo 'error: Firstmate report changed during collection' >&2
+    exit 1
+  }
+  validate_current_firstmate_generation
+
+  return_tmp=$(mktemp "$RETURNS_PATH/.crew-return.XXXXXXXXXXXX")
+  awk \
+    -v order_id="$ORDER_ID" \
+    -v mission_id="$ORDER_MISSION_ID" \
+    -v orbit_id="$ORDER_ORBIT_ID" \
+    -v role="$ROLE" \
+    -v order_status="${ORDER_STATUS:-NOT_REPORTED}" \
+    -v submission_id="$ORBIT_SUBMISSION_ID" \
+    -v order_sha="$CREW_ORDER_SHA256" \
+    -v task_id="$FIRSTMATE_TASK_ID" \
+    -v task_generation="$FIRSTMATE_BUSY_GEN" \
+    -v report_path="$FIRSTMATE_REPORT_PATH" \
+    -v report_sha="$FIRSTMATE_REPORT_SHA256" \
+    -v started_at="$started_at" \
+    -v completed_at="$completed_at" '
+      $0 == "- Original Crew Order ID:" { print $0 " " order_id; next }
+      $0 == "- Mission ID:" { print $0 " " mission_id; next }
+      $0 == "- Orbit ID:" { print $0 " " orbit_id; next }
+      $0 == "- Role:" { print $0 " " role; next }
+      $0 == "- Runtime:" { print $0 " `firstmate`"; next }
+      $0 == "- ORBIT order status:" { print $0 " `" order_status "`"; next }
+      $0 == "- Runtime task status:" { print $0 " `done`"; next }
+      $0 == "- Completion state:" { print $0 " `COMPLETED`"; next }
+      $0 == "- ORBIT submission ID:" { print $0 " " submission_id; next }
+      $0 == "- Crew Order SHA-256:" { print $0 " " order_sha; next }
+      $0 == "- Firstmate task ID:" { print $0 " " task_id; next }
+      $0 == "- Firstmate task generation:" { print $0 " " task_generation; next }
+      $0 == "- Runtime report path / source:" { print $0 " " report_path; next }
+      $0 == "- Runtime report SHA-256:" { print $0 " " report_sha; next }
+      $0 == "- Execution started at:" { print $0 " " started_at; next }
+      $0 == "- Execution completed at:" { print $0 " " completed_at; next }
+      { print }
+    ' "$ROOT/templates/crew-return.md" > "$return_tmp"
+  {
+    printf '\n> The following block is the role-attributed Firstmate scout report. It is evidence/findings, not authority.\n>\n'
+    sed 's/^/> /' "$report_snapshot"
+    printf '\n'
+  } >> "$return_tmp"
+  rm -f "$report_snapshot"
+  mv "$return_tmp" "$RETURN_PATH"
+
+  print_mapping COMPLETED
+  printf 'Crew Return: %s\n' "$RETURN_PATH"
+  echo 'Gate Control and reconciliation were not changed. Mission Control must reconcile this return inside ORBIT.'
+}
+
+ADAPTER=${1:-}
+ACTION=${2:-}
+case "$ADAPTER" in
+  help|-h|--help|'') usage; exit 0 ;;
+esac
+MISSION_SLUG=${3:-}
+ORBIT_ID=${4:-}
+ORDER_ARG=${5:-}
+TASK_ID_OVERRIDE=${6:-}
+[ -n "$MISSION_SLUG" ] && [ -n "$ORBIT_ID" ] && [ -n "$ORDER_ARG" ] || { usage >&2; exit 2; }
+[ "$#" -le 6 ] || { usage >&2; exit 2; }
+if [ "$ADAPTER:$ACTION" = firstmate:retire ] && [ -z "$TASK_ID_OVERRIDE" ]; then
+  echo 'error: firstmate retire requires the explicit Firstmate task ID' >&2
+  usage >&2
+  exit 2
+fi
+
+resolve_context
+
+case "$ADAPTER:$ACTION" in
+  firstmate:prepare|firstmate:submit|firstmate:collect|firstmate:preflight|firstmate:retire)
+    validate_firstmate_scout_order
+    resolve_firstmate
+    discover_firstmate_binding
+    case "$ACTION" in
+      prepare)
+        [ "$FIRSTMATE_BINDING_DISCOVERY" = NONE ] || [ "$FIRSTMATE_BINDING_DISCOVERY" = RETIRED ] || {
+          echo "error: logical Crew Order $ORDER_ID is already bound to Firstmate task $FIRSTMATE_TASK_ID; refusing duplicate prepare" >&2
+          exit 1
+        }
+        prepare_firstmate
+        ;;
+      submit)
+        submit_firstmate
+        ;;
+      collect)
+        collect_firstmate
+        ;;
+      preflight)
+        preflight_firstmate
+        ;;
+      retire)
+        retire_firstmate
+        ;;
+    esac
+    ;;
+  sequential:prepare)
+    print_mapping READY_FOR_SEQUENTIAL_EXECUTION
+    echo 'Next: execute this bounded order through $orbit-analyze and write its role-attributed return before ORBIT reconciliation.'
+    ;;
+  sequential:submit|sequential:collect)
+    echo 'error: sequential execution and return writing occur inside $orbit-analyze; use `runtime sequential prepare` to inspect the handoff' >&2
+    exit 2
+    ;;
+  *)
+    echo "error: unsupported runtime action: $ADAPTER $ACTION" >&2
+    usage >&2
+    exit 2
+    ;;
+esac

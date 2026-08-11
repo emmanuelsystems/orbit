@@ -12,19 +12,24 @@ A complete Mission Packet may include:
 2. `source-index.md`
 3. `state-snapshot.md`
 4. `mission-control-plan.md`
-5. `crew-findings.md`
-6. `flight-recorder-analysis.md`
-7. `decision-action-register.md`
-8. `gate-log.md`
-9. `dispatch-return.md`
-10. `candidate-mission-state.md`
+5. `crew-orders/`
+6. `crew-returns/`
+7. `crew-findings.md`
+8. `reconciliation.md`
+9. `flight-recorder-analysis.md`
+10. `decision-action-register.md`
+11. `gate-log.md`
+12. `dispatch-return.md`
+13. `candidate-mission-state.md`
 
 Not every Mission needs every component, but any omitted component must be intentionally unnecessary rather than silently missing.
 
 ## Packet rules
 
 - Raw Flight Recorder content remains a source, not the packet itself.
-- Crew findings must retain role attribution when disagreement matters.
+- Every activated role has a bounded Crew Order and a role-attributed Crew Return or explicit failure state.
+- External runtime metadata is execution provenance only; it cannot overwrite Gate Control.
+- Crew findings must retain role attribution until ORBIT reconciliation.
 - Decision state must preserve authority and provenance.
 - GO scope must be explicit.
 - External Dispatch is separate from analysis and planning.

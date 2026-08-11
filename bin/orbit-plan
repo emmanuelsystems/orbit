@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ORBIT_HOME="${ORBIT_HOME:-$HOME/.orbit}"
+
+case "${1:-}" in
+  help|-h|--help)
+    cat <<'USAGE'
+ORBIT Mission Control Planner
+
+Usage:
+  ./bin/orbit plan <mission-slug> [YYYY-MM-DD]
+
+Purpose:
+  Bind the active Mission/Orbit, prepare Crew Order and reconciliation folders,
+  and hand the exact context to $orbit-plan or $orbit-analyze.
+USAGE
+    exit 0
+    ;;
+esac
+
+slug="${1:-}"
+date="${2:-}"
+[ -n "$slug" ] || { echo "usage: orbit plan <mission-slug> [YYYY-MM-DD]" >&2; exit 2; }
+mission="$ORBIT_HOME/missions/$slug"
+[ -d "$mission" ] || { echo "error: unknown Mission: $slug" >&2; exit 1; }
+if [ -z "$date" ]; then date="$(find "$mission/orbits" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null | sort | tail -1 || true)"; fi
+[ -n "$date" ] || { echo "error: no Orbit exists" >&2; exit 1; }
+orbit="$mission/orbits/$date"
+[ -d "$orbit" ] || { echo "error: unknown Orbit: $date" >&2; exit 1; }
+[ -f "$orbit/source-index.md" ] || { echo "error: missing source-index.md" >&2; exit 1; }
+[ -f "$mission/crew.yaml" ] || cp "$ROOT/templates/crew-manifest.yaml" "$mission/crew.yaml"
+[ -f "$orbit/mission-control-plan.md" ] || cp "$ROOT/templates/mission-control-plan.md" "$orbit/mission-control-plan.md"
+[ -f "$orbit/reconciliation.md" ] || cp "$ROOT/templates/reconciliation.md" "$orbit/reconciliation.md"
+mkdir -p "$orbit/crew-orders" "$orbit/crew-returns"
+for f in mission-control-plan.md reconciliation.md; do
+  sed -i "s/^- Mission:$/- Mission: $slug/" "$orbit/$f" 2>/dev/null || true
+  sed -i "s/^- Orbit date:$/- Orbit date: $date/" "$orbit/$f" 2>/dev/null || true
+done
+mkdir -p "$ORBIT_HOME"
+umask 077
+active_tmp="$ORBIT_HOME/.active-orbit.tmp.$$"
+cat > "$active_tmp" <<EOF
+# ORBIT Active Mission Control Context
+
+- Mission: $slug
+- Orbit date: $date
+- Mission path: $mission
+- Orbit path: $orbit
+- Crew Manifest: $mission/crew.yaml
+- Crew Registry: $ROOT/crews/registry.yaml
+- Mission Control Plan: $orbit/mission-control-plan.md
+- Crew Orders: $orbit/crew-orders
+- Crew Returns: $orbit/crew-returns
+- Reconciliation: $orbit/reconciliation.md
+EOF
+mv "$active_tmp" "$ORBIT_HOME/active-orbit.md"
+
+printf 'MISSION CONTROL PLAN\nMission: %s\nOrbit: %s\nCrew Registry: %s\nCrew Orders: %s\nCrew Returns: %s\nReconciliation: %s\nActive context: %s\nNext: invoke $orbit-plan to triage and issue bounded Crew Orders.\n' \
+  "$slug" "$date" "$ROOT/crews/registry.yaml" "$orbit/crew-orders" "$orbit/crew-returns" "$orbit/reconciliation.md" "$ORBIT_HOME/active-orbit.md"

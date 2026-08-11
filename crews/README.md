@@ -10,7 +10,7 @@ Crews are execution structures, not authority structures. Crew members may analy
 
 Mission Control should activate another role only when separate work materially improves evidence quality, speed, specialization, or verification.
 
-## v0.2 standard Crew
+## v0.3 standard Crew
 
 The standard huddle Crew contains:
 
@@ -32,9 +32,8 @@ Post-GO roles are planned but remain non-executing by default:
 
 The same Crew contract may be executed by:
 
-- one agent running bounded sequential passes,
-- a native multi-agent runtime,
-- a Firstmate adapter,
-- another future runtime adapter.
+- Firstmate-managed READ_ONLY_SCOUT workers,
+- one agent running bounded sequential fallback passes,
+- another compatible runtime adapter.
 
-ORBIT owns role contracts and reconciliation. The runtime only executes the work.
+ORBIT owns Mission/Orbit identity, role contracts, Crew Orders/Returns, reconciliation, and Gate Control. The runtime only executes bounded work; completion and recommendations do not create authority.

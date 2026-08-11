@@ -9,21 +9,26 @@ case "$cmd" in
   init) exec "$ROOT/bin/orbit-init" "$@" ;;
   launch) exec "$ROOT/bin/orbit-launch" "$@" ;;
   ingest) exec "$ROOT/bin/orbit-ingest" "$@" ;;
+  plan) exec bash "$ROOT/bin/orbit-plan" "$@" ;;
   analyze) exec "$ROOT/bin/orbit-analyze" "$@" ;;
+  runtime) exec bash "$ROOT/bin/orbit-runtime" "$@" ;;
   gate) exec bash "$ROOT/bin/orbit-gate" "$@" ;;
   status) exec "$ROOT/bin/orbit-status" "$@" ;;
   close) exec "$ROOT/bin/orbit-close" "$@" ;;
   check) exec "$ROOT/bin/orbit-check" "$@" ;;
   help|-h|--help)
     cat <<USAGE
-ORBIT v0.2-alpha
+ORBIT v0.3-alpha
 Every conversation closes the loop.
 
 Usage:
   ./bin/orbit init <mission-slug> [mission-name]
   ./bin/orbit launch <mission-slug> [YYYY-MM-DD]
   ./bin/orbit ingest <mission-slug> <transcript-path> [YYYY-MM-DD]
+  ./bin/orbit plan <mission-slug> [YYYY-MM-DD]
   ./bin/orbit analyze <mission-slug> [YYYY-MM-DD]
+  ./bin/orbit runtime <adapter> <action> <mission-slug> <orbit-id> <order-file> [runtime-task-id]
+  ./bin/orbit runtime firstmate retire <mission-slug> <orbit-id> <order-file> <firstmate-task-id>
   ./bin/orbit gate <mission-slug> [YYYY-MM-DD]
   ./bin/orbit status <mission-slug>
   ./bin/orbit close <mission-slug> [YYYY-MM-DD]
@@ -33,10 +38,11 @@ Private home:
   ORBIT_HOME defaults to ~/.orbit
 
 Mission Control loop:
-  Intake -> Triage -> Plan -> Orchestrate -> Reconcile -> Gate -> Dispatch -> Remember
+  Intake -> Triage -> Crew Orders -> Execute -> Reconcile -> Gate -> Dispatch -> Remember
 
 Core rules:
   No useful independence, no extra agent.
+  No reconciliation, no Crew conclusion.
   No GO, no dispatch.
 USAGE
     ;;

@@ -1,0 +1,107 @@
+version: 1
+
+roles:
+  recorder_analyst:
+    purpose: evidence_extraction
+    independence: true
+    default_phase: post_orbit
+    allowed_inputs:
+      - flight_recorder
+    produces:
+      - recorder_findings
+    runtime_tier: efficient
+    may_authorize: false
+    may_dispatch: false
+
+  systems_analyst:
+    purpose: workflow_and_systems_analysis
+    independence: true
+    default_phase: post_orbit
+    allowed_inputs:
+      - flight_recorder
+      - mission_state
+      - mission_charter
+    produces:
+      - systems_findings
+    runtime_tier: strong
+    may_authorize: false
+    may_dispatch: false
+
+  decision_verifier:
+    purpose: decision_authority_verification
+    independence: true
+    default_phase: reconciliation
+    allowed_inputs:
+      - flight_recorder
+      - recorder_findings
+      - mission_charter
+      - gate_log
+    produces:
+      - decision_verification
+    runtime_tier: efficient
+    depends_on:
+      - recorder_analyst
+    may_authorize: false
+    may_dispatch: false
+
+  state_analyst:
+    purpose: mission_state_recovery
+    independence: true
+    default_phase: pre_orbit
+    allowed_inputs:
+      - mission_state
+      - mission_charter
+    produces:
+      - state_findings
+    runtime_tier: efficient
+    may_authorize: false
+    may_dispatch: false
+
+  context_scout:
+    purpose: changed_context_detection
+    independence: true
+    default_phase: pre_orbit
+    allowed_inputs:
+      - mission_state
+      - approved_telemetry
+    produces:
+      - context_findings
+    runtime_tier: efficient
+    may_authorize: false
+    may_dispatch: false
+
+  flight_planner:
+    purpose: approved_work_planning
+    independence: false
+    default_phase: post_go
+    allowed_inputs:
+      - decision_register
+      - gate_log
+      - reconciled_findings
+    produces:
+      - flight_plan
+    runtime_tier: strong
+    requires_go: true
+    may_authorize: false
+    may_dispatch: false
+
+  dispatch_agent:
+    purpose: approved_external_routing
+    independence: false
+    default_phase: dispatch
+    allowed_inputs:
+      - flight_plan
+      - gate_log
+      - dispatch_permissions
+    produces:
+      - dispatch_return
+    runtime_tier: efficient
+    requires_go: true
+    requires_dispatch_permission: true
+    may_authorize: false
+    may_dispatch: true
+
+principles:
+  - No useful independence, no extra agent.
+  - No reconciliation, no Crew conclusion.
+  - No GO, no dispatch.

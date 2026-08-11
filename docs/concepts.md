@@ -21,6 +21,9 @@ ORBIT treats a recurring meeting as a continuing Mission rather than a sequence 
 | Flight Recorder | Exact primary transcript |
 | Recorder Analyst | Extracts evidence, decisions, actions, owners |
 | Systems Analyst | Reviews workflow, friction, handoffs, opportunities |
+| Crew Order | Immutable, source-bounded assignment from Mission Control to one role |
+| Crew Return | Role-attributed result for one Crew Order; runtime metadata is provenance only |
+| Runtime adapter | Executes Crew Orders without owning reconciliation or human authority |
 | GO | Explicit authorization from the proper human authority |
 | NO-GO | Explicit rejection, pause, or hold |
 | PENDING | A decision is required |

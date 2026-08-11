@@ -1,0 +1,449 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+TMP="$ROOT/.tmp/runtime-adapters"
+FIXTURE="$ROOT/tests/fixtures/firstmate"
+rm -rf "$TMP"
+mkdir -p "$TMP"
+trap 'rm -rf "$TMP"' EXIT
+
+export ORBIT_HOME="$TMP/orbit-home"
+export ORBIT_FIRSTMATE_ROOT="$TMP/firstmate-root"
+export ORBIT_FIRSTMATE_HOME="$TMP/firstmate-home"
+export ORBIT_FIRSTMATE_PROJECT="$ROOT"
+mkdir -p "$ORBIT_FIRSTMATE_ROOT/bin" "$ORBIT_FIRSTMATE_HOME/data" "$ORBIT_FIRSTMATE_HOME/state"
+
+# Mission runtime selection has one owner: crew.yaml execution.mode.
+grep -Fx 'execution:' "$ROOT/templates/crew-manifest.yaml" >/dev/null
+grep -F 'mode: firstmate' "$ROOT/templates/crew-manifest.yaml" >/dev/null
+grep -F 'fallback: sequential' "$ROOT/templates/crew-manifest.yaml" >/dev/null
+for mission_config in \
+  "$ROOT/config/example.yaml" \
+  "$ROOT/examples/systems-shaper-weekly-huddle/config.yaml"; do
+  grep -F 'crew_manifest: crew.yaml' "$mission_config" >/dev/null
+  if grep -Eq '^(execution|orchestration):|^[[:space:]]+(execution_mode|fallback_execution_mode|runtime|fallback_runtime):' "$mission_config"; then
+    echo "FAIL: Mission config duplicates crew.yaml runtime policy: $mission_config" >&2
+    exit 1
+  fi
+done
+
+cat > "$ORBIT_FIRSTMATE_ROOT/bin/fm-brief.sh" <<'FAKE_BRIEF'
+#!/usr/bin/env bash
+set -euo pipefail
+id=${1:?}
+repo=${2:?}
+mode=${3:?}
+[ "$mode" = --scout ] || { echo 'fake Firstmate accepts scout only' >&2; exit 2; }
+mkdir -p "$FM_HOME/data/$id"
+printf '%s\n' "$id|$repo|$mode" >> "$FM_HOME/brief-calls.log"
+cat > "$FM_HOME/data/$id/brief.md" <<EOF
+You are a deterministic fake Firstmate scout.
+
+# Task
+{TASK}
+
+# Definition of done
+Write the scout report to $FM_HOME/data/$id/report.md.
+EOF
+FAKE_BRIEF
+
+cat > "$ORBIT_FIRSTMATE_ROOT/bin/fm-spawn.sh" <<'FAKE_SPAWN'
+#!/usr/bin/env bash
+set -euo pipefail
+id=${1:?}
+project=${2:?}
+mode=${3:?}
+[ "$mode" = --scout ] || { echo 'fake Firstmate accepts scout only' >&2; exit 2; }
+printf '%s\n' "$*" >> "$FM_HOME/spawn-calls.log"
+generation_file="$FM_HOME/spawn-generation"
+generation=0
+[ ! -f "$generation_file" ] || generation=$(cat "$generation_file")
+generation=$((generation + 1))
+printf '%s\n' "$generation" > "$generation_file"
+cat > "$FM_HOME/state/$id.meta" <<EOF
+endpoint_task_id=$id
+kind=scout
+busy_gen=gtest.$generation.$id
+EOF
+printf 'spawned %s kind=scout project=%s generation=%s\n' "$id" "$project" "$generation"
+FAKE_SPAWN
+
+cat > "$ORBIT_FIRSTMATE_ROOT/bin/fm-crew-state.sh" <<'FAKE_STATE'
+#!/usr/bin/env bash
+set -euo pipefail
+id=${1:?}
+status="$FM_HOME/state/$id.status"
+last=$(grep -v '^[[:space:]]*$' "$status" | tail -1)
+case "$last" in
+  done:*) printf 'state: done · source: status-log · %s\n' "${last#done: }" ;;
+  *) printf 'state: working · source: status-log · %s\n' "$last" ;;
+esac
+FAKE_STATE
+chmod +x "$ORBIT_FIRSTMATE_ROOT/bin/fm-brief.sh" "$ORBIT_FIRSTMATE_ROOT/bin/fm-spawn.sh" "$ORBIT_FIRSTMATE_ROOT/bin/fm-crew-state.sh"
+
+slug=systems-shaper-weekly-huddle
+orbit_id=2026-07-31
+mission="$ORBIT_HOME/missions/$slug"
+orbit="$mission/orbits/$orbit_id"
+mkdir -p "$mission/state" "$orbit/crew-orders" "$orbit/crew-returns"
+printf '# Synthetic accepted state\n' > "$mission/state/current.md"
+printf 'execution:\n  mode: firstmate\n  fallback: sequential\n' > "$mission/crew.yaml"
+printf '# Synthetic source index\n- Status: `PINNED_SYNTHETIC_STRUCTURE`\n' > "$orbit/source-index.md"
+cp "$FIXTURE/crew-orders/"*.md "$orbit/crew-orders/"
+cp "$FIXTURE/gate-log.md" "$orbit/gate-log.md"
+cp "$FIXTURE/reconciliation.md" "$orbit/reconciliation.md"
+analyze_out=$("$ROOT/bin/orbit" analyze "$slug" "$orbit_id")
+printf '%s\n' "$analyze_out" | grep -F 'Runtime: firstmate' >/dev/null
+printf '%s\n' "$analyze_out" | grep -F 'CREW ORDERS READY FOR FIRSTMATE' >/dev/null
+gate_before=$(cksum "$orbit/gate-log.md")
+reconciliation_before=$(cksum "$orbit/reconciliation.md")
+mission_state_before=$(cksum "$mission/state/current.md")
+
+sed -e 's/Crew Order ID: 001/Crew Order ID: 900/' -e 's/READ_ONLY_SCOUT/IMPLEMENTATION/' \
+  "$orbit/crew-orders/001-recorder-analyst.md" > "$orbit/crew-orders/900-implementation.md"
+if "$ROOT/bin/orbit" runtime firstmate prepare "$slug" "$orbit_id" 900-implementation.md >"$TMP/rejected.out" 2>&1; then
+  echo 'FAIL: Firstmate adapter accepted a non-scout implementation order' >&2
+  exit 1
+fi
+grep -F 'accepts only Order type READ_ONLY_SCOUT' "$TMP/rejected.out" >/dev/null
+rm -f "$orbit/crew-orders/900-implementation.md" "$TMP/rejected.out"
+
+# Provenance B. A matching-looking report from a previous submission is rejected.
+stale_task=stale-recorder-attempt
+mkdir -p "$ORBIT_FIRSTMATE_HOME/data/$stale_task"
+cp "$FIXTURE/reports/001-recorder-analyst.md" "$ORBIT_FIRSTMATE_HOME/data/$stale_task/report.md"
+printf 'endpoint_task_id=%s\nkind=scout\nbusy_gen=gtest.old.%s\n' "$stale_task" "$stale_task" > "$ORBIT_FIRSTMATE_HOME/state/$stale_task.meta"
+printf 'done: stale prior submission\n' > "$ORBIT_FIRSTMATE_HOME/state/$stale_task.status"
+if "$ROOT/bin/orbit" runtime firstmate prepare "$slug" "$orbit_id" 001-recorder-analyst.md "$stale_task" >"$TMP/stale-report.out" 2>&1; then
+  echo 'FAIL: Firstmate adapter accepted a stale prior task attempt' >&2
+  exit 1
+fi
+grep -F 'pre-existing Firstmate task artifacts' "$TMP/stale-report.out" >/dev/null
+
+stale_after_prepare=stale-after-prepare
+"$ROOT/bin/orbit" runtime firstmate prepare "$slug" "$orbit_id" 001-recorder-analyst.md "$stale_after_prepare" >/dev/null
+cp "$FIXTURE/reports/001-recorder-analyst.md" "$ORBIT_FIRSTMATE_HOME/data/$stale_after_prepare/report.md"
+if "$ROOT/bin/orbit" runtime firstmate submit "$slug" "$orbit_id" 001-recorder-analyst.md "$stale_after_prepare" >"$TMP/stale-at-submit.out" 2>&1; then
+  echo 'FAIL: Firstmate adapter submitted with a pre-existing report' >&2
+  exit 1
+fi
+grep -F 'report predates the current submission' "$TMP/stale-at-submit.out" >/dev/null
+# The stale-attempt fixture is isolated so it cannot create a second logical
+# binding for the acceptance order.
+rm -rf "$orbit/runtime/firstmate/$stale_after_prepare.binding" "$ORBIT_FIRSTMATE_HOME/data/$stale_after_prepare"
+
+prepare_001=$("$ROOT/bin/orbit" runtime firstmate prepare "$slug" "$orbit_id" 001-recorder-analyst.md)
+prepare_002=$("$ROOT/bin/orbit" runtime firstmate prepare "$slug" "$orbit_id" 002-systems-analyst.md)
+task_001=$(printf '%s\n' "$prepare_001" | awk -F': ' '/^Firstmate task ID:/ { print $2; exit }')
+task_002=$(printf '%s\n' "$prepare_002" | awk -F': ' '/^Firstmate task ID:/ { print $2; exit }')
+submission_001=$(printf '%s\n' "$prepare_001" | awk -F': ' '/^ORBIT submission ID:/ { print $2; exit }')
+submission_002=$(printf '%s\n' "$prepare_002" | awk -F': ' '/^ORBIT submission ID:/ { print $2; exit }')
+report_001="$ORBIT_FIRSTMATE_HOME/data/$task_001/report.md"
+report_002="$ORBIT_FIRSTMATE_HOME/data/$task_002/report.md"
+brief_001="$ORBIT_FIRSTMATE_HOME/data/$task_001/brief.md"
+brief_002="$ORBIT_FIRSTMATE_HOME/data/$task_002/brief.md"
+
+# A. Crew Order -> Firstmate scout mapping.
+[ -n "$task_001" ] && [ -n "$task_002" ] && [ "$task_001" != "$task_002" ]
+[ -n "$submission_001" ] && [ -n "$submission_002" ] && [ "$submission_001" != "$submission_002" ]
+project_name=$(basename "$ORBIT_FIRSTMATE_PROJECT")
+grep -F -- "$task_001|$project_name|--scout" "$ORBIT_FIRSTMATE_HOME/brief-calls.log" >/dev/null
+grep -F -- "$task_002|$project_name|--scout" "$ORBIT_FIRSTMATE_HOME/brief-calls.log" >/dev/null
+grep -F -- '- Runtime: firstmate' "$brief_001" >/dev/null
+grep -F -- "- ORBIT submission ID: $submission_001" "$brief_001" >/dev/null
+grep -F -- "- Firstmate report path: $report_001" "$brief_001" >/dev/null
+grep -E -- '^- Crew Order SHA-256: [0-9a-f]{64}$' "$brief_001" >/dev/null
+
+# B. Identity, role, constraints, source boundaries, dependencies, and status survive translation.
+grep -F -- '- Crew Order ID: 001' "$brief_001" >/dev/null
+grep -F -- "- Mission ID: $slug" "$brief_001" >/dev/null
+grep -F -- "- Orbit ID: $orbit_id" "$brief_001" >/dev/null
+grep -F -- '- Role: Recorder Analyst' "$brief_001" >/dev/null
+grep -F -- '- ORBIT order status: PLANNED' "$brief_001" >/dev/null
+grep -F -- 'Verify the synthetic acceptance source structure' "$brief_001" >/dev/null
+grep -F -- '`synthetic://acceptance/flight-recorder-structure`' "$brief_001" >/dev/null
+grep -F -- 'modifying project files or making scratch commits' "$brief_001" >/dev/null
+grep -F -- 'do not edit project files or make scratch commits' "$brief_001" >/dev/null
+grep -F -- 'implementation or ship work' "$brief_001" >/dev/null
+grep -F -- 'Mission State promotion' "$brief_001" >/dev/null
+grep -F -- 'not eligible for promotion to a Firstmate ship task' "$brief_001" >/dev/null
+grep -F -- 'None.' "$brief_001" >/dev/null
+grep -F -- 'Return synthetic structural findings' "$brief_001" >/dev/null
+
+sed -i 's/synthetic:\/\/acceptance\/flight-recorder-structure/synthetic:\/\/unapproved-source/' \
+  "$orbit/crew-orders/001-recorder-analyst.md"
+if "$ROOT/bin/orbit" runtime firstmate submit "$slug" "$orbit_id" 001-recorder-analyst.md >"$TMP/changed-order.out" 2>&1; then
+  echo 'FAIL: Firstmate adapter submitted a Crew Order changed after preparation' >&2
+  exit 1
+fi
+grep -F 'Crew Order changed after Firstmate preparation' "$TMP/changed-order.out" >/dev/null
+cp "$FIXTURE/crew-orders/001-recorder-analyst.md" "$orbit/crew-orders/001-recorder-analyst.md"
+
+"$ROOT/bin/orbit" runtime firstmate submit "$slug" "$orbit_id" 001-recorder-analyst.md >/dev/null
+"$ROOT/bin/orbit" runtime firstmate submit "$slug" "$orbit_id" 002-systems-analyst.md >/dev/null
+grep -F -- "$task_001 $ROOT --scout" "$ORBIT_FIRSTMATE_HOME/spawn-calls.log" >/dev/null
+grep -F -- "$task_002 $ROOT --scout" "$ORBIT_FIRSTMATE_HOME/spawn-calls.log" >/dev/null
+binding_001="$orbit/runtime/firstmate/$task_001.binding"
+grep -Fx 'status=SUBMITTED' "$binding_001" >/dev/null
+grep -Fx 'runtime=firstmate' "$binding_001" >/dev/null
+grep -Fx 'order_type=READ_ONLY_SCOUT' "$binding_001" >/dev/null
+grep -Fx 'report_absent_at_submit=1' "$binding_001" >/dev/null
+grep -Fx "firstmate_endpoint_task_id=$task_001" "$binding_001" >/dev/null
+grep -E '^firstmate_busy_gen=gtest\.[0-9]+\.' "$binding_001" >/dev/null
+grep -E '^crew_order_sha256=[0-9a-f]{64}$' "$binding_001" >/dev/null
+if grep -E -- '--mode|--yolo|ship' "$ORBIT_FIRSTMATE_HOME/spawn-calls.log" >/dev/null; then
+  echo 'FAIL: ORBIT mapped a scout order to Firstmate ship arguments' >&2
+  exit 1
+fi
+
+mkdir -p "$(dirname "$report_001")" "$(dirname "$report_002")"
+cp "$FIXTURE/reports/001-recorder-analyst.md" "$report_001"
+cp "$FIXTURE/reports/002-systems-analyst.md" "$report_002"
+printf 'working: synthetic scout started\ndone: synthetic recorder report complete\n' > "$ORBIT_FIRSTMATE_HOME/state/$task_001.status"
+printf 'working: synthetic scout started\ndone: synthetic systems report complete\n' > "$ORBIT_FIRSTMATE_HOME/state/$task_002.status"
+printf 'started_at=2026-08-10T10:00:00Z\ncompleted_at=2026-08-10T10:01:00Z\n' >> "$ORBIT_FIRSTMATE_HOME/state/$task_001.meta"
+printf 'started_at=2026-08-10T10:00:30Z\ncompleted_at=2026-08-10T10:02:00Z\n' >> "$ORBIT_FIRSTMATE_HOME/state/$task_002.meta"
+
+# Provenance C. A matching task ID carrying an old launch generation fails closed before analysis.
+generation_001=$(awk -F= '$1 == "busy_gen" { print $2; exit }' "$ORBIT_FIRSTMATE_HOME/state/$task_001.meta")
+sed -i "s/^busy_gen=.*/busy_gen=gtest.old.$task_001/" "$ORBIT_FIRSTMATE_HOME/state/$task_001.meta"
+blocked_orbit_before=$(find "$orbit" -type f -print0 | sort -z | xargs -0 cksum)
+if "$ROOT/bin/orbit" analyze "$slug" "$orbit_id" >"$TMP/stale-analysis.out" 2>&1; then
+  echo 'FAIL: analyze continued after stale Firstmate provenance' >&2
+  exit 1
+fi
+grep -F 'FLIGHT STATUS: HOLD — FIRSTMATE PROVENANCE BLOCKED' "$TMP/stale-analysis.out" >/dev/null
+grep -F 'Order: 001-recorder-analyst.md' "$TMP/stale-analysis.out" >/dev/null
+grep -F 'task generation does not match the submitted provenance binding' "$TMP/stale-analysis.out" >/dev/null
+if grep -F 'READY FOR SEQUENTIAL' "$TMP/stale-analysis.out" >/dev/null; then
+  echo 'FAIL: stale Firstmate collection started sequential work' >&2
+  exit 1
+fi
+[ "$(find "$orbit" -type f -print0 | sort -z | xargs -0 cksum)" = "$blocked_orbit_before" ]
+[ "$(cksum "$orbit/gate-log.md")" = "$gate_before" ]
+[ "$(cksum "$orbit/reconciliation.md")" = "$reconciliation_before" ]
+[ ! -f "$orbit/crew-returns/001-recorder-analyst.md" ]
+if "$ROOT/bin/orbit" runtime firstmate collect "$slug" "$orbit_id" 001-recorder-analyst.md >"$TMP/old-generation.out" 2>&1; then
+  echo 'FAIL: Firstmate adapter accepted old submission provenance' >&2
+  exit 1
+fi
+grep -F 'task generation does not match the submitted provenance binding' "$TMP/old-generation.out" >/dev/null
+sed -i "s/^busy_gen=.*/busy_gen=$generation_001/" "$ORBIT_FIRSTMATE_HOME/state/$task_001.meta"
+
+# Provenance D. Mismatched Firstmate endpoint task identity is rejected.
+sed -i 's/^endpoint_task_id=.*/endpoint_task_id=wrong-task-id/' "$ORBIT_FIRSTMATE_HOME/state/$task_001.meta"
+if "$ROOT/bin/orbit" runtime firstmate collect "$slug" "$orbit_id" 001-recorder-analyst.md >"$TMP/mismatched-task.out" 2>&1; then
+  echo 'FAIL: Firstmate adapter accepted mismatched task provenance' >&2
+  exit 1
+fi
+grep -F 'task generation does not match the submitted provenance binding' "$TMP/mismatched-task.out" >/dev/null
+sed -i "s/^endpoint_task_id=.*/endpoint_task_id=$task_001/" "$ORBIT_FIRSTMATE_HOME/state/$task_001.meta"
+
+# Provenance E. Any Crew Order change after submission is rejected by the full-source fingerprint.
+cp "$orbit/crew-orders/001-recorder-analyst.md" "$TMP/submitted-order.md"
+sed -i 's/A separate extraction pass preserves independence/A changed role-selection reason/' "$orbit/crew-orders/001-recorder-analyst.md"
+if "$ROOT/bin/orbit" runtime firstmate collect "$slug" "$orbit_id" 001-recorder-analyst.md >"$TMP/changed-after-submit.out" 2>&1; then
+  echo 'FAIL: Firstmate adapter accepted a Crew Order changed after submission' >&2
+  exit 1
+fi
+grep -F 'Crew Order changed after Firstmate submission' "$TMP/changed-after-submit.out" >/dev/null
+cp "$TMP/submitted-order.md" "$orbit/crew-orders/001-recorder-analyst.md"
+
+# Provenance F. Generated instructions changed after submission are rejected.
+cp "$brief_001" "$TMP/submitted-brief.md"
+printf '\nunauthorized instruction mutation\n' >> "$brief_001"
+if "$ROOT/bin/orbit" runtime firstmate collect "$slug" "$orbit_id" 001-recorder-analyst.md >"$TMP/changed-brief.out" 2>&1; then
+  echo 'FAIL: Firstmate adapter accepted modified generated instructions' >&2
+  exit 1
+fi
+grep -F 'prepared Firstmate brief changed after ORBIT sealed it' "$TMP/changed-brief.out" >/dev/null
+cp "$TMP/submitted-brief.md" "$brief_001"
+
+# Existing scout-only guard also applies to the bound task generation.
+sed -i 's/kind=scout/kind=implementation/' "$ORBIT_FIRSTMATE_HOME/state/$task_001.meta"
+if "$ROOT/bin/orbit" runtime firstmate collect "$slug" "$orbit_id" 001-recorder-analyst.md >"$TMP/non-scout.out" 2>&1; then
+  echo 'FAIL: Firstmate adapter accepted a non-scout task report' >&2
+  exit 1
+fi
+grep -F 'task generation does not match the submitted provenance binding' "$TMP/non-scout.out" >/dev/null
+sed -i 's/kind=implementation/kind=scout/' "$ORBIT_FIRSTMATE_HOME/state/$task_001.meta"
+
+# Provenance G. Collection without the submitted binding is rejected.
+missing_binding_task=missing-binding-attempt
+sed -e 's/Crew Order ID: 002/Crew Order ID: 003/' \
+  -e 's/002-systems-analyst/003-missing-binding/' \
+  "$orbit/crew-orders/002-systems-analyst.md" > "$orbit/crew-orders/003-missing-binding.md"
+"$ROOT/bin/orbit" runtime firstmate prepare "$slug" "$orbit_id" 003-missing-binding.md "$missing_binding_task" >/dev/null
+"$ROOT/bin/orbit" runtime firstmate submit "$slug" "$orbit_id" 003-missing-binding.md "$missing_binding_task" >/dev/null
+rm "$orbit/runtime/firstmate/$missing_binding_task.binding"
+if "$ROOT/bin/orbit" runtime firstmate collect "$slug" "$orbit_id" 003-missing-binding.md "$missing_binding_task" >"$TMP/missing-binding.out" 2>&1; then
+  echo 'FAIL: Firstmate adapter collected without a submission binding' >&2
+  exit 1
+fi
+grep -F 'without an authoritative binding' "$TMP/missing-binding.out" >/dev/null
+# Do not leave an unbound task artifact that could be mistaken for a new
+# logical attempt after this negative provenance case.
+rm -rf "$ORBIT_FIRSTMATE_HOME/data/$missing_binding_task" "$ORBIT_FIRSTMATE_HOME/state/$missing_binding_task" "$ORBIT_FIRSTMATE_HOME/state/$missing_binding_task.meta" "$ORBIT_FIRSTMATE_HOME/state/$missing_binding_task.status"
+
+# Provenance H. A logical Crew Order cannot be prepared again under a new
+# Firstmate task ID once its authoritative binding exists.
+rerun_task=rerun-recorder-attempt
+if "$ROOT/bin/orbit" runtime firstmate prepare "$slug" "$orbit_id" 001-recorder-analyst.md "$rerun_task" >"$TMP/rerun-duplicate.out" 2>&1; then
+  echo 'FAIL: duplicate logical Crew Order prepare was accepted' >&2
+  exit 1
+fi
+grep -F 'refusing duplicate prepare' "$TMP/rerun-duplicate.out" >/dev/null
+[ ! -f "$ORBIT_FIRSTMATE_HOME/data/$rerun_task/brief.md" ]
+
+# Provenance A. A current matching task generation and report are accepted.
+"$ROOT/bin/orbit" runtime firstmate collect "$slug" "$orbit_id" 001-recorder-analyst.md >/dev/null
+"$ROOT/bin/orbit" runtime firstmate collect "$slug" "$orbit_id" 002-systems-analyst.md >/dev/null
+return_001="$orbit/crew-returns/001-recorder-analyst.md"
+return_002="$orbit/crew-returns/002-systems-analyst.md"
+
+# C. Completed reports become role-attributed ORBIT Crew Returns.
+grep -F -- '- Original Crew Order ID: 001' "$return_001" >/dev/null
+grep -F -- '- Role: Recorder Analyst' "$return_001" >/dev/null
+grep -F -- '- Runtime: `firstmate`' "$return_001" >/dev/null
+grep -F -- "- ORBIT submission ID: $submission_001" "$return_001" >/dev/null
+grep -E -- '^- Crew Order SHA-256: [0-9a-f]{64}$' "$return_001" >/dev/null
+grep -F -- "- Firstmate task ID: $task_001" "$return_001" >/dev/null
+grep -F -- "- Firstmate task generation: $generation_001" "$return_001" >/dev/null
+grep -F -- "- Runtime report path / source: $report_001" "$return_001" >/dev/null
+grep -E -- '^- Runtime report SHA-256: [0-9a-f]{64}$' "$return_001" >/dev/null
+grep -F -- '- Completion state: `COMPLETED`' "$return_001" >/dev/null
+grep -F -- '- Execution started at: 2026-08-10T10:00:00Z' "$return_001" >/dev/null
+grep -F -- 'The acceptance fixture contains two distinct Crew Order identities' "$return_001" >/dev/null
+grep -F -- '- Role: Systems Analyst' "$return_002" >/dev/null
+
+# D. Firstmate completion cannot create GO.
+[ "$(cksum "$orbit/gate-log.md")" = "$gate_before" ]
+grep -F -- '- Gate authority effect: `NONE`' "$return_001" >/dev/null
+grep -F -- 'Only ORBIT Gate Control records valid human authority.' "$return_001" >/dev/null
+
+# E. Firstmate recommendations cannot authorize implementation.
+grep -F -- 'Consider an implementation improvement only after ORBIT reconciliation' "$return_002" >/dev/null
+grep -F -- '- Implementation authorization: `NONE`' "$return_002" >/dev/null
+grep -F -- 'Implementation authorization is absent.' "$return_002" >/dev/null
+
+# F. Reconciliation remains inside ORBIT and Gate Control remains authoritative.
+[ "$(cksum "$orbit/reconciliation.md")" = "$reconciliation_before" ]
+[ "$(cksum "$mission/state/current.md")" = "$mission_state_before" ]
+grep -F -- 'ORBIT owns this reconciliation.' "$orbit/reconciliation.md" >/dev/null
+grep -F -- 'Gate Control remains authoritative.' "$orbit/reconciliation.md" >/dev/null
+
+# G. Sequential fallback remains available through the same runtime interface.
+sequential_out=$("$ROOT/bin/orbit" runtime sequential prepare "$slug" "$orbit_id" 001-recorder-analyst.md)
+printf '%s\n' "$sequential_out" | grep -F 'Runtime: sequential' >/dev/null
+printf '%s\n' "$sequential_out" | grep -F 'Task status: READY_FOR_SEQUENTIAL_EXECUTION' >/dev/null
+[ -f "$ROOT/runtimes/sequential.md" ]
+
+# H. Legacy v0.3 Crew Order field names and sequential Mission configuration remain compatible.
+legacy_slug=legacy-v03-mission
+legacy_orbit=2026-08-07
+legacy_mission="$ORBIT_HOME/missions/$legacy_slug"
+legacy_path="$legacy_mission/orbits/$legacy_orbit"
+mkdir -p "$legacy_mission/state" "$legacy_path/crew-orders" "$legacy_path/crew-returns"
+printf '# Legacy accepted state\n' > "$legacy_mission/state/current.md"
+printf 'execution:\n  mode: sequential\n' > "$legacy_mission/crew.yaml"
+cat > "$legacy_path/crew-orders/001-recorder-analyst.md" <<'LEGACY_ORDER'
+# Crew Order
+
+- Order ID: 001
+- Mission: legacy-v03-mission
+- Orbit date: 2026-08-07
+- Role: Recorder Analyst
+- Status: `PLANNED`
+
+## Objective
+
+Read a bounded synthetic source.
+
+## Allowed inputs
+
+- synthetic source locator
+
+## Explicitly disallowed
+
+- implementation
+- external Dispatch
+- Mission State promotion
+
+## Required output
+
+Role-attributed findings.
+
+## Dependencies
+
+None.
+LEGACY_ORDER
+legacy_out=$("$ROOT/bin/orbit" runtime sequential prepare "$legacy_slug" "$legacy_orbit" 001-recorder-analyst.md)
+printf '%s\n' "$legacy_out" | grep -F 'Crew Order ID: 001' >/dev/null
+printf '%s\n' "$legacy_out" | grep -F 'Runtime: sequential' >/dev/null
+grep -F 'mode: sequential' "$legacy_mission/crew.yaml" >/dev/null
+
+# An untyped legacy-shaped order is ineligible for Firstmate scouts and cannot mutate analysis artifacts.
+legacy_firstmate_slug=legacy-firstmate-mission
+legacy_firstmate_orbit=2026-08-09
+legacy_firstmate_mission="$ORBIT_HOME/missions/$legacy_firstmate_slug"
+legacy_firstmate_path="$legacy_firstmate_mission/orbits/$legacy_firstmate_orbit"
+mkdir -p "$legacy_firstmate_mission/state" "$legacy_firstmate_path/crew-orders" "$legacy_firstmate_path/crew-returns"
+printf '# Legacy accepted state\n' > "$legacy_firstmate_mission/state/current.md"
+printf 'execution:\n  mode: firstmate\n  fallback: sequential\n' > "$legacy_firstmate_mission/crew.yaml"
+printf '# Synthetic source index\n- Status: `PINNED_SYNTHETIC_STRUCTURE`\n' > "$legacy_firstmate_path/source-index.md"
+cat > "$legacy_firstmate_path/crew-orders/001-recorder-analyst.md" <<'LEGACY_FIRSTMATE_ORDER'
+# Crew Order
+
+- Order ID: 001
+- Mission: legacy-firstmate-mission
+- Orbit date: 2026-08-09
+- Role: Recorder Analyst
+- Status: `PLANNED`
+
+## Objective
+
+Read a bounded synthetic source.
+
+## Allowed inputs
+
+- synthetic source locator
+
+## Explicitly disallowed
+
+- implementation
+- external Dispatch
+- Mission State promotion
+
+## Required output
+
+Role-attributed findings.
+
+## Dependencies
+
+None.
+LEGACY_FIRSTMATE_ORDER
+legacy_firstmate_before=$(find "$legacy_firstmate_path" -type f -print0 | sort -z | xargs -0 cksum)
+if "$ROOT/bin/orbit" analyze "$legacy_firstmate_slug" "$legacy_firstmate_orbit" >"$TMP/legacy-firstmate.out" 2>&1; then
+  echo 'FAIL: Firstmate analysis accepted an untyped legacy Crew Order' >&2
+  exit 1
+fi
+grep -F 'FLIGHT STATUS: HOLD — FIRSTMATE PROVENANCE BLOCKED' "$TMP/legacy-firstmate.out" >/dev/null
+grep -F 'Firstmate adapter accepts only Order type READ_ONLY_SCOUT' "$TMP/legacy-firstmate.out" >/dev/null
+[ "$(find "$legacy_firstmate_path" -type f -print0 | sort -z | xargs -0 cksum)" = "$legacy_firstmate_before" ]
+
+v02_slug=legacy-v02-mission
+v02_mission="$ORBIT_HOME/missions/$v02_slug"
+mkdir -p "$v02_mission/state" "$v02_mission/orbits"
+printf '# Legacy v0.2 charter marker\n' > "$v02_mission/charter.md"
+printf '# Legacy v0.2 accepted state marker\n' > "$v02_mission/state/current.md"
+"$ROOT/bin/orbit" launch "$v02_slug" 2026-08-08 >/dev/null
+grep -F 'Legacy v0.2 charter marker' "$v02_mission/charter.md" >/dev/null
+grep -F 'Legacy v0.2 accepted state marker' "$v02_mission/state/current.md" >/dev/null
+[ -f "$v02_mission/crew.yaml" ]
+grep -F 'mode: firstmate' "$v02_mission/crew.yaml" >/dev/null
+grep -F 'fallback: sequential' "$v02_mission/crew.yaml" >/dev/null
+[ -d "$v02_mission/orbits/2026-08-08/crew-orders" ]
+[ -d "$v02_mission/orbits/2026-08-08/crew-returns" ]
+
+echo 'PASS: ORBIT v0.3 Firstmate runtime adapter acceptance tests (A-H)'

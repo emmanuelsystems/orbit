@@ -17,6 +17,9 @@ telemetry:
   flight_recorder_type: local_file
   supporting_sources: []
 
+mission_control:
+  crew_manifest: crew.yaml
+
 permissions:
   mission_control_can:
     - analyze_sources

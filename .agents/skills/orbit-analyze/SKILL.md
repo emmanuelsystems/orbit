@@ -1,89 +1,113 @@
 ---
 name: orbit-analyze
-description: Run ORBIT Mission Control for an ingested Orbit: triage the work, plan the Crew, execute the needed analysis roles, reconcile findings, apply Gate Control, build the Flight Plan, and prepare the Mission Packet without silently promoting state or dispatching externally.
+description: Execute an ORBIT v0.3 Mission Control plan by running bounded Crew Orders through the configured runtime, preserving role-attributed returns, reconciling disagreement, applying Gate Control, and preparing the Mission Packet without silently promoting state or dispatching externally.
 user-invocable: true
 ---
 
 # orbit-analyze
 
-## Mission Control read order
+## Active context
+
+1. Read `~/.orbit/active-orbit.md` first when it exists.
+2. Treat its Mission and Orbit as authoritative.
+3. If it is missing, require an explicit Mission and Orbit rather than guessing.
+
+## Required reads
 
 1. `AGENTS.md`
 2. `protocols/mission-control.md`
-3. `protocols/source-boundary.md`
-4. `protocols/reconciliation.md`
-5. `protocols/go-no-go.md`
-6. `protocols/gate-control.md`
-7. `protocols/mission-packet.md`
-8. Mission-local `charter.md`
-9. Mission-local `crew.yaml`
-10. Mission-local `state/current.md`
-11. current Orbit `source-index.md`
-12. current Orbit `gate-log.md`
+3. `protocols/crew-orchestration.md`
+4. `protocols/source-boundary.md`
+5. `protocols/reconciliation.md`
+6. `protocols/go-no-go.md`
+7. `protocols/gate-control.md`
+8. `protocols/mission-packet.md`
+9. `crews/registry.yaml`
+10. `runtimes/README.md`
+11. configured adapter doc: `runtimes/firstmate.md` or `runtimes/sequential.md`
+12. active Mission `charter.md`
+13. active Mission `crew.yaml`
+14. active Mission `state/current.md`
+15. active Orbit `source-index.md`
+16. active Orbit `gate-log.md`
+17. active Orbit `mission-control-plan.md`
+18. active Orbit `crew-orders/`
 
 ## Safety gate
 
-Verify the exact primary Flight Recorder is accessible. If it is missing, stop. Do not substitute another transcript.
+Verify the exact primary Flight Recorder is accessible when an active Crew Order requires it. If it is missing, block that order. Do not substitute another transcript.
 
-## 1. Intake and triage
+## Planning gate
 
-Determine what work is actually required. Identify ambiguity, missing evidence, conflicts, authority questions, and likely human gates.
+Crew Orders must exist before execution.
 
-Update `mission-control-plan.md`.
+If `crew-orders/` contains no active orders, stop and invoke or recommend `$orbit-plan` rather than inventing assignments during execution.
 
-Do not activate another Crew role unless independent work materially improves the Orbit.
+## Runtime
 
-> **No useful independence, no extra agent.**
+Use the Mission `crew.yaml` execution mode. Missing, empty, malformed, or unsupported `execution.mode` is a configuration HOLD; never default to sequential.
 
-## 2. Plan the Crew
+### Firstmate
 
-Use the Mission `crew.yaml` as the available Crew contract, not as a requirement to run every role.
+Read `runtimes/firstmate.md`. Run `./bin/orbit analyze <mission> <orbit>` before any Firstmate analysis. It requires every active order to declare the canonical Crew Order v1 `READ_ONLY_SCOUT` contract and fails closed on stale, incompatible, missing, duplicate, non-resumable, artifact-only, or already-bound provenance for the logical order.
 
-For the standard huddle path, consider:
+On a Firstmate provenance HOLD, stop. Name the blocked order and reason; do not select sequential, create a replacement Crew Return, reconcile, update Mission Packet artifacts as completed analysis, or create GO. Sequential is available only when `crew.yaml` explicitly selects `mode: sequential`.
 
-- Recorder Analyst
-- Systems Analyst
-- Decision Verifier
+For a ready order, use `./bin/orbit runtime firstmate prepare`, inspect the generated scout brief, then `submit`. Firstmate owns worker spawning, isolation, task lifecycle, queues, supervision, completion, backends, and recovery.
 
-Run sequentially when only one agent is available. A multi-agent runtime may run independent roles concurrently.
+After Firstmate records completion, use `collect` to capture each report as the matching role-attributed ORBIT Crew Return. Do not reconcile while required orders remain in flight. Firstmate completion, findings, recommendations, and consensus do not create or broaden GO.
 
-## 3. Execute Crew roles
+### Sequential fallback
 
-### Recorder Analyst
+Read `runtimes/sequential.md`. For each active Crew Order:
 
-Extract themes, explicit decisions, proposals, actions, explicit owners, blockers / holds, unresolved questions, commitments, and evidence references.
+1. adopt only the named role,
+2. read only allowed sources plus governing ORBIT safety protocols,
+3. respect dependencies,
+4. perform the bounded objective,
+5. write one role-attributed return under `crew-returns/`,
+6. preserve unresolved evidence and uncertainty,
+7. never create human authority.
 
-### Systems Analyst
+Both adapters use matching filenames such as:
 
-Analyze context recovery burden, duplicated work, unclear authority, Telemetry gaps, handoff problems, automation opportunities, and work that should remain human-owned.
+```text
+crew-orders/001-recorder-analyst.md
+crew-returns/001-recorder-analyst.md
+```
 
-### Decision Verifier
+A later role may read an earlier return only when its Crew Order explicitly allows or requires that dependency.
 
-Independently check consequential decision claims against the Flight Recorder, Mission Charter, and live Gate Log. Verify authority and scope. When evidence is ambiguous, recommend `PENDING` or `OBSERVED`, not GO.
+## Reconcile inside ORBIT
 
-Write role-attributed findings to `crew-findings.md`.
+The runtime never owns reconciliation. After all required Crew Orders complete or are explicitly blocked:
 
-## 4. Reconcile
+1. read all role returns,
+2. populate `crew-findings.md`,
+3. populate `reconciliation.md`,
+4. preserve material disagreement,
+5. compare evidence and authority,
+6. use Decision Verifier findings when present,
+7. keep ambiguous items `PENDING` or `OBSERVED`.
 
-Preserve material disagreement. Do not flatten conflicting findings into false certainty.
+> **No reconciliation, no Crew conclusion.**
 
-Populate or update:
+Then populate or update:
 
 - `flight-recorder-analysis.md`
 - `decision-action-register.md`
-- `crew-findings.md`
 
-## 5. Gate
+## Gate
 
-Apply `GO`, `NO_GO`, `PENDING`, or `OBSERVED` only under the Gate Control rules.
+Apply only `GO`, `NO_GO`, `PENDING`, or `OBSERVED` under Gate Control.
 
-Live human directives in `gate-log.md` supersede older status only within their valid scope.
+Crew consensus is not authority. Live valid human directives in `gate-log.md` control active authorization within their scope.
 
-## 6. Flight Plan and Mission Packet
+## Flight Plan and Mission Packet
 
-Only GO actions may enter the executable Flight Plan. External Dispatch still requires permission.
+Only GO actions may enter the executable Flight Plan.
 
-Prepare:
+Prepare or update:
 
 - `dispatch-return.md`
 - `candidate-mission-state.md`
@@ -91,3 +115,5 @@ Prepare:
 
 Do not promote candidate Mission State without human approval.
 Do not perform external Dispatch without separate authorization.
+
+> **No GO, no dispatch.**
