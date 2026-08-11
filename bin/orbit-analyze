@@ -12,14 +12,36 @@ if [ -z "$date" ]; then date="$(find "$mission/orbits" -mindepth 1 -maxdepth 1 -
 orbit="$mission/orbits/$date"
 [ -f "$orbit/source-index.md" ] || { echo "error: missing source-index.md" >&2; exit 1; }
 if ! grep -q 'PINNED_' "$orbit/source-index.md"; then echo 'error: no pinned Flight Recorder; run orbit ingest first' >&2; exit 1; fi
+runtime_mode=$(awk '
+  BEGIN { in_execution = 0; execution_count = 0; count = 0; invalid = 0 }
+  /^[[:space:]]*execution:[[:space:]]*(#.*)?$/ {
+    execution_count++
+    if (in_execution) invalid = 1
+    in_execution = 1
+    next
+  }
+  in_execution && /^[^[:space:]]/ { in_execution = 0 }
+  in_execution && /^[[:space:]]+mode:/ {
+    value = $0
+    sub(/^[[:space:]]+mode:[[:space:]]*/, "", value)
+    if (value == "" || value ~ /[[:space:]]#/) invalid = 1
+    count++
+    mode = value
+  }
+  END {
+    if (execution_count != 1 || count != 1 || invalid || (mode != "firstmate" && mode != "sequential")) exit 1
+    print mode
+  }
+' "$mission/crew.yaml" 2>/dev/null || true)
+if [ "$runtime_mode" != firstmate ] && [ "$runtime_mode" != sequential ]; then
+  echo 'FLIGHT STATUS: HOLD — CONFIGURATION ERROR'
+  echo "Execution mode is missing, empty, malformed, or unsupported in $mission/crew.yaml."
+  echo 'Analysis stopped. No Crew work, completion mutation, sequential fallback, or Firstmate dispatch was started.'
+  exit 1
+fi
+runtime="$runtime_mode"
 orders="$(find "$orbit/crew-orders" -maxdepth 1 -type f -name '*.md' 2>/dev/null | wc -l | tr -d ' ')"
 returns="$(find "$orbit/crew-returns" -maxdepth 1 -type f -name '*.md' 2>/dev/null | wc -l | tr -d ' ')"
-runtime="$(awk '
-  /^execution:/ { in_execution=1; next }
-  in_execution && /^[^[:space:]]/ { in_execution=0 }
-  in_execution && /^[[:space:]]+mode:/ { sub(/^[[:space:]]+mode:[[:space:]]*/, ""); print; exit }
-' "$mission/crew.yaml")"
-[ -n "$runtime" ] || runtime=sequential
 printf 'ORBIT // CREW ORCHESTRATION\nMission: %s\nOrbit: %s\nCrew Manifest: %s\nCrew Registry: %s\nRuntime: %s\nCrew Orders: %s (%s files)\nCrew Returns: %s (%s files)\nReconciliation: %s\nActive context: %s\n' "$slug" "$date" "$mission/crew.yaml" "$ROOT/crews/registry.yaml" "$runtime" "$orbit/crew-orders" "$orders" "$orbit/crew-returns" "$returns" "$orbit/reconciliation.md" "$ORBIT_HOME/active-orbit.md"
 if [ "$orders" -eq 0 ]; then
   echo 'NO CREW ORDERS' >&2
@@ -28,9 +50,29 @@ if [ "$orders" -eq 0 ]; then
   echo 'Do not silently generate orders.' >&2
   exit 1
 elif [ "$runtime" = firstmate ]; then
-  echo 'FLIGHT STATUS: CREW ORDERS READY FOR FIRSTMATE'
-  echo 'Next: use `orbit runtime firstmate prepare`, inspect the scout brief, then submit and collect each completed report.'
-  echo 'After returns are captured, invoke $orbit-analyze for ORBIT-owned reconciliation and Gate Control.'
+  active_orders=0
+  while IFS= read -r order; do
+    order_name=$(basename "$order")
+    [ -f "$orbit/crew-returns/$order_name" ] && continue
+    active_orders=$((active_orders + 1))
+    if ! preflight=$("$ROOT/bin/orbit" runtime firstmate preflight "$slug" "$date" "$order_name" 2>&1); then
+      reason=$(printf '%s\n' "$preflight" | awk '/^error:/ { sub(/^error: /, ""); print; exit }')
+      [ -n "$reason" ] || reason='Firstmate preflight could not verify immutable order provenance'
+      printf 'FLIGHT STATUS: HOLD — FIRSTMATE PROVENANCE BLOCKED\nOrder: %s\nReason: %s\n' "$order_name" "$reason"
+      echo 'Analysis stopped. No sequential fallback, Crew Return, reconciliation, Mission Packet, or Gate Control mutation was started.'
+      echo 'Sequential execution is available only when crew.yaml explicitly selects mode: sequential.'
+      exit 1
+    fi
+  done < <(find "$orbit/crew-orders" -maxdepth 1 -type f -name '*.md' -print | sort)
+  if [ "$active_orders" -eq 0 ]; then
+    echo 'FLIGHT STATUS: NO ACTIVE FIRSTMATE ORDERS'
+    echo 'All Crew Orders already have matching Crew Returns. Reconcile only through the configured ORBIT operator flow.'
+  else
+    echo 'FLIGHT STATUS: CREW ORDERS READY FOR FIRSTMATE'
+    echo 'Each active order passed read-only eligibility and provenance preflight.'
+    echo 'Next: use `orbit runtime firstmate prepare`, inspect the scout brief, then submit and collect each completed report.'
+    echo 'After returns are captured, invoke $orbit-analyze for ORBIT-owned reconciliation and Gate Control.'
+  fi
 elif [ "$runtime" = sequential ]; then
   echo 'FLIGHT STATUS: CREW ORDERS READY FOR SEQUENTIAL FALLBACK'
   echo 'Next: invoke $orbit-analyze in your agent to execute bounded sequential passes and reconcile returns.'

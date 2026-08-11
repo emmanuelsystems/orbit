@@ -41,6 +41,14 @@ for (const command of expected) {
 NODE
 
 export ORBIT_HOME="$TMP/home"
+export ORBIT_FIRSTMATE_ROOT="$TMP/firstmate-root"
+export ORBIT_FIRSTMATE_HOME="$TMP/firstmate-home"
+export ORBIT_FIRSTMATE_PROJECT="$ROOT"
+mkdir -p "$ORBIT_FIRSTMATE_ROOT/bin" "$ORBIT_FIRSTMATE_HOME/data" "$ORBIT_FIRSTMATE_HOME/state"
+for script in fm-brief.sh fm-spawn.sh fm-crew-state.sh; do
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$ORBIT_FIRSTMATE_ROOT/bin/$script"
+  chmod +x "$ORBIT_FIRSTMATE_ROOT/bin/$script"
+done
 transcript="$TMP/transcript.txt"
 printf 'Client: We should review the bounded workflow next week.\n' > "$transcript"
 "$ROOT/bin/orbit" init test-mission "Test Mission" >/dev/null
@@ -65,9 +73,13 @@ status_after=$(find "$ORBIT_HOME" -type f -print0 | sort -z | xargs -0 cksum)
 [ "$status_before" = "$status_after" ]
 grep -F 'Mission: test-mission' "$TMP/status.out" >/dev/null
 grep -F 'Crew Orders: 0' "$TMP/status.out" >/dev/null
+grep -F 'Flight Plan: AVAILABLE (decision-action-register.md#Flight Plan)' "$TMP/status.out" >/dev/null
+grep -F 'Candidate Mission State: AVAILABLE (candidate-mission-state.md; `candidate_not_promoted`)' "$TMP/status.out" >/dev/null
+grep -F 'Active holds: NONE_REPORTED' "$TMP/status.out" >/dev/null
 
 order_dir="$ORBIT_HOME/missions/test-mission/orbits/2026-08-10/crew-orders"
-cp "$ROOT/tests/fixtures/firstmate/crew-orders/001-recorder-analyst.md" "$order_dir/001-recorder-analyst.md"
+sed -e 's/systems-shaper-weekly-huddle/test-mission/' -e 's/2026-07-31/2026-08-10/' \
+  "$ROOT/tests/fixtures/firstmate/crew-orders/001-recorder-analyst.md" > "$order_dir/001-recorder-analyst.md"
 before_order=$(cksum "$order_dir/001-recorder-analyst.md")
 "$ROOT/bin/orbit" analyze test-mission 2026-08-10 >"$TMP/analyze-ready.out"
 grep -F 'Runtime: firstmate' "$TMP/analyze-ready.out" >/dev/null
