@@ -51,6 +51,8 @@ last=$(grep -v '^[[:space:]]*$' "$FM_HOME/state/$id.status" | tail -1)
 case "$last" in
   done:*) printf 'state: done · source: synthetic-status · %s\n' "${last#done: }" ;;
   failed:*) printf 'state: failed · source: synthetic-status · %s\n' "${last#failed: }" ;;
+  blocked:*) printf 'state: blocked · source: synthetic-status · %s\n' "${last#blocked: }" ;;
+  paused:*) printf 'state: paused · source: synthetic-status · %s\n' "${last#paused: }" ;;
   *) printf 'state: working · source: synthetic-status · %s\n' "$last" ;;
 esac
 FAKE_STATE
@@ -124,6 +126,9 @@ grep -Fx 'status=RETIRED' "$systems_binding" >/dev/null
 grep -Fx 'retired_from_status=SUBMITTED' "$recorder_binding" >/dev/null
 grep -Fx 'retired_firstmate_state=done' "$recorder_binding" >/dev/null
 grep -Fx 'retired_authority=HUMAN_DIRECTIVE' "$recorder_binding" >/dev/null
+grep -E '^retired_binding_sha256=[0-9a-f]{64}$' "$recorder_binding" >/dev/null
+grep -E '^retired_report_sha256=[0-9a-f]{64}$' "$recorder_binding" >/dev/null
+grep -E '^retired_task_sha256=[0-9a-f]{64}$' "$recorder_binding" >/dev/null
 # Every original binding field survives; only status is terminalized and retirement provenance is added.
 diff -u <(printf '%s\n' "$recorder_binding_before" | grep -v '^status=') <(grep -Ev '^(status|retired_|retirement_)' "$recorder_binding") >/dev/null
 diff -u <(printf '%s\n' "$systems_binding_before" | grep -v '^status=') <(grep -Ev '^(status|retired_|retirement_)' "$systems_binding") >/dev/null
@@ -141,6 +146,44 @@ grep -F "report_path=$recorder_report" "$recorder_binding" >/dev/null
 [ "$(cksum "$orbit/gate-log.md")" = "$gate_before" ]
 [ "$(cksum "$orbit/dispatch-return.md")" = "$dispatch_before" ]
 printf '%s\n%s\n' "$recorder_retire_out" "$systems_retire_out" | grep -F 'No GO' >/dev/null
+
+# A retired binding must fail closed if its retirement provenance or preserved
+# binding/report/task hash is altered before preflight.
+retired_binding_backup="$TMP/recorder-retired.binding"
+cp "$recorder_binding" "$retired_binding_backup"
+assert_retired_preflight_holds() {
+  local label=$1
+  if "$ROOT/bin/orbit" runtime firstmate preflight "$slug" "$orbit_id" 001-recorder-analyst.md >"$TMP/retired-$label.out" 2>&1; then
+    echo "FAIL: retired preflight accepted altered $label" >&2
+    exit 1
+  fi
+  grep -F 'error:' "$TMP/retired-$label.out" >/dev/null
+  cp "$retired_binding_backup" "$recorder_binding"
+}
+sed -i 's/^retired_authority=.*/retired_authority=FLIGHT_RECORDER/' "$recorder_binding"
+assert_retired_preflight_holds authority
+sed -i 's/^retired_firstmate_state=.*/retired_firstmate_state=failed/' "$recorder_binding"
+assert_retired_preflight_holds state
+sed -i 's/^orbit_submission_id=.*/orbit_submission_id=mutated-retirement-submission/' "$recorder_binding"
+assert_retired_preflight_holds binding-preservation
+sed -i 's/^retired_binding_sha256=.*/retired_binding_sha256=0000000000000000000000000000000000000000000000000000000000000000/' "$recorder_binding"
+assert_retired_preflight_holds binding-hash
+sed -i 's/^retired_report_sha256=.*/retired_report_sha256=0000000000000000000000000000000000000000000000000000000000000000/' "$recorder_binding"
+assert_retired_preflight_holds report-hash
+sed -i 's/^retired_task_sha256=.*/retired_task_sha256=0000000000000000000000000000000000000000000000000000000000000000/' "$recorder_binding"
+assert_retired_preflight_holds task-hash
+report_original=$(cksum "$recorder_report")
+printf '\nretired task artifact mutation\n' >> "$recorder_status"
+assert_retired_preflight_holds task-artifact
+[ "$(cksum "$recorder_status")" != "$recorder_status_before" ]
+cp "$retired_binding_backup" "$recorder_binding"
+printf '\nretired report artifact mutation\n' >> "$recorder_report"
+assert_retired_preflight_holds report-artifact
+cp "$retired_binding_backup" "$recorder_binding"
+[ "$(cksum "$recorder_report")" != "$report_original" ]
+cp "$FIXTURE/reports/001-recorder-analyst.md" "$recorder_report"
+printf 'working: synthetic task started\ndone: historical report preserved\n' > "$recorder_status"
+[ "$(cksum "$recorder_report")" = "$recorder_report_before" ]
 
 # C. Retired history is a historical preflight result and permits a distinct clean prepare.
 retired_preflight=$("$ROOT/bin/orbit" runtime firstmate preflight "$slug" "$orbit_id" 001-recorder-analyst.md)
@@ -206,6 +249,26 @@ fi
 grep -F 'terminal non-active state' "$TMP/active-retire.out" >/dev/null
 grep -Fx 'status=SUBMITTED' "$orbit/runtime/firstmate/$active_task.binding" >/dev/null
 rm -rf "$orbit/crew-orders/005-active-order.md" "$orbit/runtime/firstmate/$active_task.binding" "$ORBIT_FIRSTMATE_HOME/data/$active_task" "$ORBIT_FIRSTMATE_HOME/state/$active_task.meta" "$ORBIT_FIRSTMATE_HOME/state/$active_task.status"
+
+# A blocked or paused task is not terminalized by this ORBIT operation.
+for nonterminal_state in blocked paused; do
+  nonterminal_order_id=$([ "$nonterminal_state" = blocked ] && printf '005' || printf '006')
+  nonterminal_order="$nonterminal_order_id-$nonterminal_state-order.md"
+  cp "$FIXTURE/crew-orders/002-systems-analyst.md" "$orbit/crew-orders/$nonterminal_order"
+  sed -i "s/Crew Order ID: 002/Crew Order ID: $nonterminal_order_id/" "$orbit/crew-orders/$nonterminal_order"
+  nonterminal_task="${nonterminal_state}-retirement-attempt"
+  "$ROOT/bin/orbit" runtime firstmate prepare "$slug" "$orbit_id" "$nonterminal_order" "$nonterminal_task" >/dev/null
+  "$ROOT/bin/orbit" runtime firstmate submit "$slug" "$orbit_id" "$nonterminal_order" "$nonterminal_task" >/dev/null
+  cp "$FIXTURE/reports/002-systems-analyst.md" "$ORBIT_FIRSTMATE_HOME/data/$nonterminal_task/report.md"
+  printf 'working: synthetic task started\n%s: synthetic nonterminal state\n' "$nonterminal_state" > "$ORBIT_FIRSTMATE_HOME/state/$nonterminal_task.status"
+  if "$ROOT/bin/orbit" runtime firstmate retire "$slug" "$orbit_id" "$nonterminal_order" "$nonterminal_task" >"$TMP/$nonterminal_state-retire.out" 2>&1; then
+    echo "FAIL: $nonterminal_state Firstmate task was retired" >&2
+    exit 1
+  fi
+  grep -F 'terminal non-active state' "$TMP/$nonterminal_state-retire.out" >/dev/null
+  grep -Fx 'status=SUBMITTED' "$orbit/runtime/firstmate/$nonterminal_task.binding" >/dev/null
+  rm -rf "$orbit/crew-orders/$nonterminal_order" "$orbit/runtime/firstmate/$nonterminal_task.binding" "$ORBIT_FIRSTMATE_HOME/data/$nonterminal_task" "$ORBIT_FIRSTMATE_HOME/state/$nonterminal_task.meta" "$ORBIT_FIRSTMATE_HOME/state/$nonterminal_task.status"
+done
 
 [ "$(cksum "$mission/state/current.md")" = "$mission_state_before" ]
 [ "$(cksum "$orbit/gate-log.md")" = "$gate_before" ]

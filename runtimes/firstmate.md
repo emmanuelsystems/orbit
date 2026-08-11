@@ -66,10 +66,14 @@ changing only the ORBIT binding status to `RETIRED`:
 ```
 
 Retirement retains the original submission, task, report, hashes, and runtime
-provenance in place and adds retirement provenance. Retired history is ignored
-as a current execution binding; malformed, orphaned, mismatched, and multiple
-current bindings still hold. A fresh prepare uses a distinct task identity and
-never overwrites retired Firstmate artifacts.
+provenance in place and adds retirement provenance. Preflight re-verifies the
+HUMAN_DIRECTIVE retirement record, the preserved binding hash, the report hash,
+the Firstmate task metadata/status hash, and the current terminal state. Only
+completed or otherwise terminal non-active states qualify; blocked and paused
+states remain a HOLD. Retired history is ignored as a current execution
+binding; malformed, orphaned, mismatched, and multiple current bindings still
+hold. A fresh prepare uses a distinct task identity and never overwrites
+retired Firstmate artifacts.
 
 `prepare` requires a fresh Firstmate task ID, fingerprints the complete immutable Crew Order, allocates a unique ORBIT submission ID, and asks Firstmate to scaffold a scout brief. The generated brief visibly carries the Crew Order ID, Mission/Orbit IDs, role, objective, allowed sources, prohibited actions, dependencies, expected return contract, task status, submission ID, Firstmate task ID, report path, and order fingerprint.
 
