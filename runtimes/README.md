@@ -48,6 +48,6 @@ The thin CLI surface is adapter-neutral:
 ./bin/orbit runtime <adapter> <action> <mission-slug> <orbit-id> <order-file> [runtime-task-id]
 ```
 
-Firstmate implements `prepare`, `submit`, and `collect`. Sequential implements `prepare`; execution and return writing remain inside `$orbit-analyze`. Future runtimes can add actions without changing Crew Order semantics.
+Firstmate implements `prepare`, `submit`, `collect`, and the explicit human-invoked historical `retire` operation. Sequential implements `prepare`; execution and return writing remain inside `$orbit-analyze`. Future runtimes can add actions without changing Crew Order semantics.
 
 ORBIT does not implement process supervision, terminal/session management, watcher logic, wake queues, recovery, or generic delivery mechanics. Those remain runtime responsibilities.

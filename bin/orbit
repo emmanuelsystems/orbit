@@ -28,6 +28,7 @@ Usage:
   ./bin/orbit plan <mission-slug> [YYYY-MM-DD]
   ./bin/orbit analyze <mission-slug> [YYYY-MM-DD]
   ./bin/orbit runtime <adapter> <action> <mission-slug> <orbit-id> <order-file> [runtime-task-id]
+  ./bin/orbit runtime firstmate retire <mission-slug> <orbit-id> <order-file> <firstmate-task-id>
   ./bin/orbit gate <mission-slug> [YYYY-MM-DD]
   ./bin/orbit status <mission-slug>
   ./bin/orbit close <mission-slug> [YYYY-MM-DD]
